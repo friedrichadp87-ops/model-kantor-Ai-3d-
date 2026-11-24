@@ -1,0 +1,43 @@
+{
+  "name": "AI Content Factory",
+  "version": "1.6.5",
+  "dashboard": "app/index.html",
+  "singleDashboardFile": true,
+  "worker": "worker/worker.py",
+  "firestoreRules": "firestore.rules",
+  "localData": "%LOCALAPPDATA%/AIContentFactory",
+  "buildTarget": "Windows 10 x64; build EXE locally using BUILD-WINDOWS-EXE.bat",
+  "features": [
+    "13-role AI Workforce: CEO Manager, Trend Researcher, Bible Researcher, Scriptwriter, Theological Guardian, Pastoral Sensitivity, Storyboard Artist, Image Generator, Voice Artist, Video Generator, Video Editor, SEO Publisher, Community / Prayer Manager",
+    "Claude API Script Director writes Indonesian narration scripts, hooks, endings, story outlines and 6–8 scene storyboards using JSON Schema structured outputs",
+    "Claude storyboard includes reusable character bible, exact ordered narration segments, English Veo prompts, camera movements, moods and 9:16 portrait composition",
+    "Ollama Qwen3 4B remains available for local Bible research, theological/pastoral reviews, AI content QC, SEO, and other local Agent functions; optional Groq editorial review remains optional",
+    "ElevenLabs is the exclusive Indonesian text-to-speech provider; per-channel Voice IDs, long-narration chunking, MP3-to-WAV conversion and character-level alignment are retained",
+    "Actual ElevenLabs character timestamps produce story_timeline.json and absolute scene cut points; proportional fallback is explicitly labelled when matching is insufficient",
+    "Google Veo 3.1 Fast/Standard via Vertex AI generates video-only portrait 9:16 clips using ComfyUI-generated character reference images and Google Cloud Storage output",
+    "Veo generation uses a single global visual-project lock, serial scene requests, daily estimated-spend guardrail, cumulative clips-per-project cap, usage ledger and stop-on-quota behavior",
+    "Google Flow is supported as a manual MP4-per-scene import path; uploaded clips are owner/task-scoped and validated before FFmpeg assembly",
+    "Three Guardians remain: Theological Guardian and Pastoral Sensitivity Checker are mandatory pre-publication gates; Community / Prayer Manager creates manual-review comment drafts",
+    "Bible Series Generator retains Protestant 66-book canon, 1,189 chapters, episode planning and sequential production; uploaded TB JSON remains local to the Windows Worker and verse text is not synchronized to Firestore/Netlify",
+    "ComfyUI + Stable Diffusion 1.5 remains the local image/reference generator; Openverse remains an external asset fallback with attribution/license review",
+    "Whisper/faster-whisper local CPU int8 transcription remains available for Indonesian church sermon recordings",
+    "FFmpeg renders story videos in 9:16 portrait 720x1280, 30 fps; the standalone Video Editor Studio renders 1080x1920 with voice/music/SRT mixing and under-50MB target",
+    "Church Sermon Shorts Editor, original sermon audio retention, timeline clipping, and manual approval remain available",
+    "Netlify Dashboard at https://officecontent.netlify.app with authenticated Windows Worker over Tailscale Funnel HTTPS; Worker remains bound to localhost",
+    "Firebase Authentication, owner-scoped Firestore metadata, 4 channel profiles, YouTube OAuth, upload ledger, Analytics, reports and workforce synchronization are retained",
+    "24/7 scheduler with Sunday 06:00–15:00 WIB rest window, resumable queue, task persistence, QC, upload safety, logs and Windows source/EXE build remain available"
+  ],
+  "defaultSafety": {
+    "production": false,
+    "autoUpload": false,
+    "privacy": "private",
+    "analyticsSync": false,
+    "bibleAutoQueue": true,
+    "bibleProductionRequiresUploadedJsonAndTermsAcknowledgement": true,
+    "operationalMode": "hybrid_local_first",
+    "sundayRest": "Sunday 06:00–15:00 Asia/Jakarta"
+  },
+  "release": "Claude API Story Director + ElevenLabs character-aligned voice + Google Veo 3.1 9:16 video + Google Flow MP4 import + FFmpeg; all v1.6.4 features retained.",
+  "dashboardUrl": "https://officecontent.netlify.app/",
+  "remoteWorkerTunnel": "Tailscale Funnel HTTPS (*.ts.net); Worker binds only to 127.0.0.1:8765"
+}

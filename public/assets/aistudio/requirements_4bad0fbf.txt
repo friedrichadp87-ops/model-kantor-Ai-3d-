@@ -1,0 +1,8 @@
+google-api-python-client>=2.130,<3
+google-auth-oauthlib>=1.2,<2
+google-auth>=2.29,<3
+requests>=2.31,<3
+Pillow>=10.3,<13
+imageio-ffmpeg>=0.5,<1
+faster-whisper>=1.1,<2
+google-cloud-storage>=2.17,<4

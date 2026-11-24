@@ -1,0 +1,6 @@
+{
+  "name": "Kantor AI 3D",
+  "description": "Simulasi kantor agen AI interaktif dalam bentuk arsitektur 3D dengan navigasi otonom dan penugasan agen real-time.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -1,0 +1,11 @@
+AI Content Factory v1.6.5 — Claude Story Director + Veo 3.1 + ElevenLabs + Netlify Dashboard
+
+Paket lengkap: AI-Content-Factory-v1.6.5-Claude-Veo-Complete-Source.zip
+Paket deploy dashboard: AI-Content-Factory-v1.6.5-Netlify-Dashboard.zip
+Dashboard: https://officecontent.netlify.app/
+
+Script Director: Claude API (`claude-sonnet-5-5`) untuk naskah dan storyboard ber-JSON schema. Voice Artist: ElevenLabs-only dengan alignment karakter dan audio WAV final. Video Generator: Veo 3.1 Fast/Standard melalui Google Cloud Vertex AI, 9:16, referensi karakter, GCS output. Alternatif: Google Flow manual MP4 per scene, lalu FFmpeg.
+
+Antrean Veo: satu project visual aktif secara global; estimasi budget per hari; batas total klip per project; stop-on-quota. API Key Claude, ElevenLabs dan service account Veo tidak dimasukkan dalam source ZIP dan disimpan terenkripsi oleh Worker.
+
+Semua fitur v1.6.4 dipertahankan: 13 Agent, tiga Guardian/Community roles, Bible Series 66 kitab, Bible JSON lokal, Netlify+Tailscale Worker, Firestore owner data, Ollama, ComfyUI, Whisper, Church Shorts, Video Editor Studio, Analytics, YouTube, FFmpeg dan jadwal operasi.
