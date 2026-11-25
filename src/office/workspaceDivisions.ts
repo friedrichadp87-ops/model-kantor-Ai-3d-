@@ -9,6 +9,11 @@ import type { GeneratedMediaItem } from './mediaStudio';
 
 export type WorkspaceDivisionId =
   | 'dashboard'
+  | 'performa-lantai'
+  | 'kontrol-3d'
+  | 'lantai-1'
+  | 'lantai-2'
+  | 'lantai-3'
   | 'channel-youtube'
   | 'ai-agent'
   | 'guardian-komunitas'
@@ -34,9 +39,49 @@ export const WORKSPACE_DIVISIONS: WorkspaceDivisionConfig[] = [
     id: 'dashboard',
     label: 'Dashboard',
     divisionName: 'Pusat Komando 3D',
-    description: 'Ikhtisar seluruh lantai kantor AI 3D dengan 13 karakter agen, utilisasi, dan log aktivitas.',
+    description: 'Tampilan bersih penuh Menara Kantor AI 3D 3 lantai dengan 39 karyawan AI.',
     cameraZone: 'overview',
     leadAgents: ['ceo', 'bible-researcher', 'theological-guardian'],
+  },
+  {
+    id: 'performa-lantai',
+    label: 'Performa & Tugas',
+    divisionName: 'Utilisasi & Penugasan 3 Lantai',
+    description: 'Pantau utilisasi 39 karyawan AI dan tugaskan spesifik ke Lantai 1, Lantai 2, dan Lantai 3.',
+    cameraZone: 'overview',
+    leadAgents: ['ceo', 'scriptwriter', 'bible-researcher'],
+  },
+  {
+    id: 'kontrol-3d',
+    label: 'Kontrol Kantor 3D',
+    divisionName: 'Kamera, Lantai & Simulasi 3D',
+    description: 'Atur tampilan 3 lantai cutaway, sudut kamera, pencahayaan, kecepatan simulasi, dan aksi rutin tim.',
+    cameraZone: 'overview',
+    leadAgents: ['ceo', 'storyboard-artist', 'video-composer'],
+  },
+  {
+    id: 'lantai-1',
+    label: 'L1 · Daily Faith',
+    divisionName: 'Alur Lantai 1 · Daily Faith & Inspiration',
+    description: 'Alur kerja produksi akun YouTube Daily Faith & Inspiration beserta 13 agen Lantai 1.',
+    cameraZone: 'overview',
+    leadAgents: ['trend-researcher', 'scriptwriter', 'pastoral-checker'],
+  },
+  {
+    id: 'lantai-2',
+    label: 'L2 · Stories 3D',
+    divisionName: 'Alur Lantai 2 · Bible Stories 3D',
+    description: 'Alur kerja seri animasi akun YouTube Bible Stories 3D (Kejadian → Wahyu) beserta 13 agen Lantai 2.',
+    cameraZone: 'overview',
+    leadAgents: ['bible-researcher', 'storyboard-artist', 'video-composer'],
+  },
+  {
+    id: 'lantai-3',
+    label: 'L3 · Bible Facts',
+    divisionName: 'Alur Lantai 3 · Bible Facts & Mysteries',
+    description: 'Alur kerja dokumenter akun YouTube Bible Facts & Mysteries beserta 13 agen Lantai 3.',
+    cameraZone: 'overview',
+    leadAgents: ['bible-researcher', 'theological-guardian', 'video-editor'],
   },
   {
     id: 'channel-youtube',

@@ -1,0 +1,816 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ------------------------------------------------------------
+    // AI CONTENT FACTORY — OWNER WORKSPACE
+    // Login provider: Firebase Authentication Google only.
+    // All records are scoped below users/{uid}.
+    // Never store YouTube OAuth access/refresh tokens, API secrets,
+    // service-account keys, or AI provider secrets in Firestore.
+    // ------------------------------------------------------------
+
+    function isGoogleOwner(uid) {
+      return request.auth != null
+        && request.auth.uid == uid
+        && request.auth.token.firebase.sign_in_provider == 'google.com';
+    }
+
+    function hasKeys(data, requiredKeys, allowedKeys) {
+      return data.keys().hasAll(requiredKeys)
+        && data.keys().hasOnly(allowedKeys);
+    }
+
+    function validChannelId(channelId) {
+      return channelId in [
+        'bible-stories-3d',
+        'daily-faith-inspiration',
+        'bible-facts-mysteries',
+        'gkin-hosiana'
+      ];
+    }
+
+    function optionalString(data, field, maxLength) {
+      return !(field in data)
+        || (data[field] is string && data[field].size() <= maxLength);
+    }
+
+    function optionalTimestamp(data, field) {
+      return !(field in data) || data[field] is timestamp;
+    }
+
+    function optionalNonNegativeInt(data, field, maxValue) {
+      return !(field in data)
+        || (data[field] is int && data[field] >= 0 && data[field] <= maxValue);
+    }
+
+
+
+    function validBibleSeries(data, seriesId) {
+      return hasKeys(data,
+          ['seriesId','title','scopeType','scopeId','scopeLabel','channelId','status','progress','totalBooks','completedBooks','totalEpisodes','queuedEpisodes','targetDurationSeconds','audience','sourceVersion','sourceStatus','errorMessage','createdAt','updatedAt'],
+          ['seriesId','title','scopeType','scopeId','scopeLabel','channelId','status','progress','totalBooks','completedBooks','totalEpisodes','queuedEpisodes','targetDurationSeconds','audience','sourceVersion','sourceStatus','errorMessage','createdAt','updatedAt','autoQueue'])
+        && data.seriesId == seriesId && data.seriesId is string && data.seriesId.size() <= 80
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 160
+        && data.scopeType in ['canon','old_testament','new_testament','group','book','custom']
+        && data.scopeId is string && data.scopeId.size() <= 80
+        && data.scopeLabel is string && data.scopeLabel.size() <= 120
+        && validChannelId(data.channelId)
+        && data.status in ['planning','planned','partial','paused','paused_quota','failed','queued','producing','needs_review','completed']
+        && data.progress is int && data.progress >= 0 && data.progress <= 100
+        && data.totalBooks is int && data.totalBooks >= 1 && data.totalBooks <= 66
+        && data.completedBooks is int && data.completedBooks >= 0 && data.completedBooks <= 66
+        && data.totalEpisodes is int && data.totalEpisodes >= 0 && data.totalEpisodes <= 1200
+        && data.queuedEpisodes is int && data.queuedEpisodes >= 0 && data.queuedEpisodes <= 1200
+        && data.targetDurationSeconds is int && data.targetDurationSeconds >= 20 && data.targetDurationSeconds <= 60
+        && data.audience is string && data.audience.size() <= 120
+        && data.sourceVersion is string && data.sourceVersion.size() <= 120
+        && data.sourceStatus in ['pending_local_json','local_json','unavailable']
+        && (!('autoQueue' in data) || data.autoQueue is bool)
+        && data.errorMessage is string && data.errorMessage.size() <= 1200
+        && data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+
+    function validBibleEpisode(data, episodeId) {
+      return hasKeys(data,
+          ['episodeId','seriesId','sequenceNo','bookId','bookName','testament','groupId','title','summary','reference','centralTheme','teachingPoint','hook','status','channelId','targetDurationSeconds','taskId','createdAt','updatedAt'],
+          ['episodeId','seriesId','sequenceNo','bookId','bookName','testament','groupId','title','summary','reference','centralTheme','teachingPoint','hook','status','channelId','targetDurationSeconds','taskId','createdAt','updatedAt'])
+        && data.episodeId == episodeId && data.episodeId is string && data.episodeId.size() <= 80
+        && data.seriesId is string && data.seriesId.size() <= 80
+        && data.sequenceNo is int && data.sequenceNo >= 1 && data.sequenceNo <= 1200
+        && data.bookId is string && data.bookId.size() <= 60
+        && data.bookName is string && data.bookName.size() > 0 && data.bookName.size() <= 80
+        && data.testament in ['old','new']
+        && data.groupId is string && data.groupId.size() <= 60
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 120
+        && data.summary is string && data.summary.size() <= 2500
+        && data.reference is string && data.reference.size() > 0 && data.reference.size() <= 160
+        && data.centralTheme is string && data.centralTheme.size() <= 300
+        && data.teachingPoint is string && data.teachingPoint.size() <= 500
+        && data.hook is string && data.hook.size() <= 350
+        && data.status in ['planned','queued','producing','completed','failed','paused','needs_review']
+        && validChannelId(data.channelId)
+        && data.targetDurationSeconds is int && data.targetDurationSeconds >= 20 && data.targetDurationSeconds <= 60
+        && data.taskId is string && data.taskId.size() <= 128
+        && data.createdAt is timestamp && data.updatedAt is timestamp;
+    }
+
+    function validProfile(data, uid) {
+      return hasKeys(
+          data,
+          ['email', 'displayName', 'createdAt', 'updatedAt'],
+          ['email', 'displayName', 'createdAt', 'updatedAt']
+        )
+        && data.email is string
+        && data.email == request.auth.token.email
+        && data.displayName is string
+        && data.displayName.size() > 0
+        && data.displayName.size() <= 80
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    // Existing v0.4 production queue schema — kept compatible.
+    function validJob(data) {
+      return hasKeys(
+          data,
+          ['title', 'channelId', 'format', 'status', 'targetDate', 'notes', 'createdAt', 'updatedAt'],
+          ['title', 'channelId', 'format', 'status', 'targetDate', 'notes', 'createdAt', 'updatedAt']
+        )
+        && data.title is string
+        && data.title.size() > 0
+        && data.title.size() <= 120
+        && validChannelId(data.channelId)
+        && data.format in ['YouTube Shorts', 'Shorts narasi', 'Fakta Alkitab']
+        && data.status in ['Ide', 'Dalam Produksi', 'Siap Publikasi', 'Sudah Terbit (manual)', 'Sudah Terbit (otomatis)', 'Gagal Produksi']
+        && data.targetDate is string
+        && data.targetDate.size() <= 10
+        && data.notes is string
+        && data.notes.size() <= 2000
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validOfficeSettings(data) {
+      return hasKeys(
+          data,
+          ['officeName', 'dailyTarget', 'publishMode', 'timezone', 'pauseSunday', 'updatedAt'],
+          ['officeName', 'dailyTarget', 'publishMode', 'timezone', 'pauseSunday', 'updatedAt', 'operationalMode']
+        )
+        && data.officeName is string
+        && data.officeName.size() > 0
+        && data.officeName.size() <= 60
+        && data.dailyTarget is int
+        && data.dailyTarget >= 1
+        && data.dailyTarget <= 5
+        && data.publishMode in ['auto_after_checks', 'owner_approval']
+        && data.timezone == 'Asia/Jakarta'
+        && data.pauseSunday is bool
+        && optionalString(data, 'operationalMode', 40)
+        && data.updatedAt is timestamp;
+    }
+
+    // Safe YouTube OAuth application configuration. Store only the public Client ID.
+    // Never allow client secrets or user access/refresh tokens in this document.
+    function validYoutubeOAuthSettings(data) {
+      return hasKeys(
+          data,
+          ['clientId', 'clientType', 'provider', 'status', 'updatedAt'],
+          ['clientId', 'clientType', 'provider', 'status', 'updatedAt']
+        )
+        && data.clientId is string
+        && data.clientId.size() >= 20
+        && data.clientId.size() <= 512
+        && data.clientId.matches('^[0-9]+(-[A-Za-z0-9_-]+)?\\.apps\\.googleusercontent\\.com$')
+        && data.clientType == 'desktop'
+        && data.provider == 'google'
+        && data.status == 'configured'
+        && data.updatedAt is timestamp;
+    }
+
+    function validAutomationSettings(data) {
+      return hasKeys(
+          data,
+          ['enabled', 'timezone', 'activeDays', 'pauseSunday', 'maxConcurrentTasks', 'updatedAt'],
+          ['enabled', 'timezone', 'activeDays', 'pauseSunday', 'maxConcurrentTasks', 'updatedAt']
+        )
+        && data.enabled is bool
+        && data.timezone == 'Asia/Jakarta'
+        && data.activeDays is list
+        && data.activeDays.size() == 7
+        && data.activeDays.hasOnly(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])
+        && data.activeDays.hasAll(['mon', 'tue', 'wed', 'thu', 'fri', 'sat', 'sun'])
+        && data.pauseSunday == false
+        && data.maxConcurrentTasks is int
+        && data.maxConcurrentTasks >= 1
+        && data.maxConcurrentTasks <= 3
+        && data.updatedAt is timestamp;
+    }
+
+    function validChannel(data, channelId) {
+      return hasKeys(
+          data,
+          ['channelId', 'channelName', 'connectionStatus', 'createdAt', 'updatedAt'],
+          [
+            'channelId', 'channelName', 'connectionStatus', 'createdAt', 'updatedAt',
+            'youtubeChannelId', 'youtubeChannelName', 'handle', 'customUrl', 'thumbnailUrl',
+            'connectedGoogleEmail', 'connectedAt', 'lastSyncedAt', 'subscriberCount'
+          ]
+        )
+        && validChannelId(channelId)
+        && data.channelId == channelId
+        && data.channelName is string
+        && data.channelName.size() > 0
+        && data.channelName.size() <= 100
+        && data.connectionStatus in ['not_connected', 'connected', 'needs_reauth', 'disabled']
+        && optionalString(data, 'youtubeChannelId', 80)
+        && optionalString(data, 'youtubeChannelName', 100)
+        && optionalString(data, 'handle', 100)
+        && optionalString(data, 'customUrl', 300)
+        && optionalString(data, 'thumbnailUrl', 1000)
+        && optionalString(data, 'connectedGoogleEmail', 254)
+        && optionalTimestamp(data, 'connectedAt')
+        && optionalTimestamp(data, 'lastSyncedAt')
+        && optionalNonNegativeInt(data, 'subscriberCount', 2000000000)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validContent(data) {
+      return hasKeys(
+          data,
+          ['jobId', 'channelId', 'title', 'format', 'status', 'createdAt', 'updatedAt'],
+          [
+            'jobId', 'channelId', 'title', 'format', 'status', 'createdAt', 'updatedAt',
+            'description', 'script', 'hook', 'targetDate', 'durationSeconds', 'tags',
+            'thumbnailUrl', 'notes', 'assetId', 'language', 'qualityScore',
+            'createdByAgentId', 'lastEditedByAgentId'
+          ]
+        )
+        && data.jobId is string && data.jobId.size() <= 128
+        && validChannelId(data.channelId)
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 120
+        && data.format in ['YouTube Shorts', 'Shorts narasi', 'Fakta Alkitab']
+        && data.status in [
+          'idea', 'researching', 'scripted', 'storyboard_ready', 'assets_ready',
+          'voice_ready', 'editing', 'quality_check', 'ready_to_upload',
+          'scheduled', 'published', 'failed', 'paused'
+        ]
+        && optionalString(data, 'description', 5000)
+        && optionalString(data, 'script', 30000)
+        && optionalString(data, 'hook', 500)
+        && optionalString(data, 'targetDate', 10)
+        && optionalString(data, 'thumbnailUrl', 1000)
+        && optionalString(data, 'notes', 4000)
+        && optionalString(data, 'assetId', 128)
+        && optionalString(data, 'language', 20)
+        && optionalString(data, 'createdByAgentId', 60)
+        && optionalString(data, 'lastEditedByAgentId', 60)
+        && (!(('durationSeconds') in data)
+          || (data.durationSeconds is int && data.durationSeconds >= 0 && data.durationSeconds <= 180))
+        && (!('tags' in data) || (data.tags is list && data.tags.size() <= 30))
+        && (!('qualityScore' in data)
+          || (data.qualityScore is number && data.qualityScore >= 0 && data.qualityScore <= 100))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validProductionTask(data) {
+      return hasKeys(
+          data,
+          ['taskType', 'status', 'priority', 'createdAt', 'updatedAt'],
+          [
+            'taskType', 'status', 'priority', 'createdAt', 'updatedAt',
+            'jobId', 'contentId', 'channelId', 'assignedAgentId', 'scheduledAt',
+            'startedAt', 'finishedAt', 'inputSummary', 'outputSummary',
+            'errorMessage', 'retryCount'
+          ]
+        )
+        && data.taskType in [
+          'research_topic', 'verify_bible_context', 'write_script', 'create_storyboard',
+          'generate_images', 'generate_voice', 'render_video', 'quality_check',
+          'youtube_upload', 'sync_analytics', 'generate_report'
+        ]
+        && data.status in ['queued', 'running', 'completed', 'failed', 'paused', 'cancelled']
+        && data.priority is int && data.priority >= 1 && data.priority <= 5
+        && optionalString(data, 'jobId', 128)
+        && optionalString(data, 'contentId', 128)
+        && (!('channelId' in data) || validChannelId(data.channelId))
+        && optionalString(data, 'assignedAgentId', 60)
+        && optionalTimestamp(data, 'scheduledAt')
+        && optionalTimestamp(data, 'startedAt')
+        && optionalTimestamp(data, 'finishedAt')
+        && optionalString(data, 'inputSummary', 4000)
+        && optionalString(data, 'outputSummary', 8000)
+        && optionalString(data, 'errorMessage', 2000)
+        && (!('retryCount' in data)
+          || (data.retryCount is int && data.retryCount >= 0 && data.retryCount <= 10))
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validAgentRun(data) {
+      return hasKeys(
+          data,
+          ['agentId', 'taskType', 'status', 'summary', 'createdAt', 'updatedAt'],
+          [
+            'agentId', 'taskType', 'status', 'summary', 'createdAt', 'updatedAt',
+            'taskId', 'jobId', 'contentId', 'channelId', 'startedAt', 'finishedAt',
+            'errorMessage', 'durationMs', 'outputAssetId'
+          ]
+        )
+        && data.agentId in [
+          'ceo-manager', 'trend-researcher', 'bible-researcher', 'scriptwriter',
+          'theological-guardian', 'pastoral-sensitivity',
+          'storyboard-artist', 'image-generator', 'video-generator', 'voice-artist',
+          'video-editor', 'seo-publisher', 'community-prayer-manager'
+        ]
+        && data.taskType in [
+          'research_topic', 'verify_bible_context', 'write_script', 'create_storyboard',
+          'generate_images', 'generate_voice', 'render_video', 'quality_check',
+          'theological_review', 'pastoral_sensitivity',
+          'youtube_upload', 'sync_analytics', 'generate_report'
+        ]
+        && data.status in ['queued', 'running', 'completed', 'failed', 'paused', 'cancelled']
+        && data.summary is string && data.summary.size() <= 8000
+        && optionalString(data, 'taskId', 128)
+        && optionalString(data, 'jobId', 128)
+        && optionalString(data, 'contentId', 128)
+        && (!('channelId' in data) || validChannelId(data.channelId))
+        && optionalTimestamp(data, 'startedAt')
+        && optionalTimestamp(data, 'finishedAt')
+        && optionalString(data, 'errorMessage', 2000)
+        && optionalNonNegativeInt(data, 'durationMs', 86400000)
+        && optionalString(data, 'outputAssetId', 128)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validActivityLog(data) {
+      return hasKeys(
+          data,
+          ['action', 'actorType', 'actorId', 'message', 'createdAt'],
+          [
+            'action', 'actorType', 'actorId', 'message', 'createdAt',
+            'channelId', 'jobId', 'contentId', 'taskId', 'agentRunId', 'uploadId', 'reportId', 'detailsText'
+          ]
+        )
+        && data.action in [
+          'job_created', 'job_updated', 'job_deleted', 'task_created', 'task_started',
+          'task_completed', 'task_failed', 'agent_started', 'agent_completed',
+          'agent_failed', 'asset_created', 'video_rendered', 'quality_check_passed',
+          'quality_check_failed', 'youtube_upload_started', 'youtube_upload_succeeded',
+          'youtube_upload_failed', 'youtube_video_updated', 'youtube_video_deleted',
+          'schedule_created', 'schedule_updated', 'channel_connected', 'channel_disconnected',
+          'analytics_synced', 'report_generated', 'worker_started', 'worker_stopped',
+          'system_paused', 'system_resumed'
+        ]
+        && data.actorType in ['owner', 'agent', 'worker', 'system']
+        && data.actorId is string && data.actorId.size() > 0 && data.actorId.size() <= 100
+        && data.message is string && data.message.size() <= 2000
+        && optionalString(data, 'channelId', 80)
+        && (!('channelId' in data) || validChannelId(data.channelId))
+        && optionalString(data, 'jobId', 128)
+        && optionalString(data, 'contentId', 128)
+        && optionalString(data, 'taskId', 128)
+        && optionalString(data, 'agentRunId', 128)
+        && optionalString(data, 'uploadId', 128)
+        && optionalString(data, 'reportId', 128)
+        && optionalString(data, 'detailsText', 8000)
+        && data.createdAt is timestamp;
+    }
+
+    function validUpload(data) {
+      return hasKeys(
+          data,
+          [
+            'channelId', 'youtubeChannelId', 'youtubeVideoId', 'title',
+            'privacyStatus', 'status', 'watchUrl', 'uploadedAt', 'createdAt', 'updatedAt'
+          ],
+          [
+            'channelId', 'youtubeChannelId', 'youtubeVideoId', 'title',
+            'privacyStatus', 'status', 'watchUrl', 'uploadedAt', 'createdAt', 'updatedAt',
+            'jobId', 'contentId', 'description', 'scheduledAt', 'publishedAt',
+            'thumbnailUrl', 'durationSeconds', 'lastCheckedAt', 'viewCount',
+            'likeCount', 'commentCount'
+          ]
+        )
+        && validChannelId(data.channelId)
+        && data.youtubeChannelId is string && data.youtubeChannelId.size() > 0 && data.youtubeChannelId.size() <= 80
+        && data.youtubeVideoId is string && data.youtubeVideoId.size() > 0 && data.youtubeVideoId.size() <= 40
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 120
+        && data.privacyStatus in ['private', 'unlisted', 'public']
+        && data.status in ['uploaded', 'processing', 'scheduled', 'published', 'failed', 'deleted']
+        && data.watchUrl is string && data.watchUrl.size() <= 500
+        && data.uploadedAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp
+        && optionalString(data, 'jobId', 128)
+        && optionalString(data, 'contentId', 128)
+        && optionalString(data, 'description', 5000)
+        && optionalTimestamp(data, 'scheduledAt')
+        && optionalTimestamp(data, 'publishedAt')
+        && optionalString(data, 'thumbnailUrl', 1000)
+        && optionalTimestamp(data, 'lastCheckedAt')
+        && optionalNonNegativeInt(data, 'durationSeconds', 86400)
+        && optionalNonNegativeInt(data, 'viewCount', 2000000000)
+        && optionalNonNegativeInt(data, 'likeCount', 2000000000)
+        && optionalNonNegativeInt(data, 'commentCount', 2000000000);
+    }
+
+    function validReport(data) {
+      return hasKeys(
+          data,
+          [
+            'reportType', 'periodStart', 'periodEnd', 'title', 'summary',
+            'totalJobs', 'completedJobs', 'failedJobs', 'videosUploaded', 'generatedAt', 'createdAt'
+          ],
+          [
+            'reportType', 'periodStart', 'periodEnd', 'title', 'summary',
+            'totalJobs', 'completedJobs', 'failedJobs', 'videosUploaded', 'generatedAt', 'createdAt',
+            'channelId', 'detailsText', 'views', 'engagedViews', 'subscribersLost', 'channelSubscriberCount', 'likes', 'comments', 'shares',
+            'subscribersGained', 'watchTimeMinutes', 'averageViewDurationSeconds',
+            'averageViewPercentage', 'estimatedRevenueMicros', 'thumbnailImpressions', 'thumbnailCtrPercent', 'revenueCurrency'
+          ]
+        )
+        && data.reportType in ['daily', 'weekly', 'monthly', 'channel', 'production', 'audit']
+        && data.periodStart is string && data.periodStart.size() <= 10
+        && data.periodEnd is string && data.periodEnd.size() <= 10
+        && data.title is string && data.title.size() > 0 && data.title.size() <= 160
+        && data.summary is string && data.summary.size() <= 5000
+        && data.totalJobs is int && data.totalJobs >= 0
+        && data.completedJobs is int && data.completedJobs >= 0
+        && data.failedJobs is int && data.failedJobs >= 0
+        && data.videosUploaded is int && data.videosUploaded >= 0
+        && data.generatedAt is timestamp
+        && data.createdAt is timestamp
+        && (!('channelId' in data) || validChannelId(data.channelId))
+        && optionalString(data, 'detailsText', 20000)
+        && optionalNonNegativeInt(data, 'views', 2000000000)
+        && optionalNonNegativeInt(data, 'engagedViews', 2000000000)
+        && optionalNonNegativeInt(data, 'subscribersLost', 2000000000)
+        && optionalNonNegativeInt(data, 'channelSubscriberCount', 2000000000)
+        && optionalNonNegativeInt(data, 'likes', 2000000000)
+        && optionalNonNegativeInt(data, 'comments', 2000000000)
+        && optionalNonNegativeInt(data, 'shares', 2000000000)
+        && optionalNonNegativeInt(data, 'subscribersGained', 2000000000)
+        && optionalNonNegativeInt(data, 'watchTimeMinutes', 2000000000)
+        && (!('averageViewDurationSeconds' in data)
+          || (data.averageViewDurationSeconds is number && data.averageViewDurationSeconds >= 0))
+        && (!('averageViewPercentage' in data)
+          || (data.averageViewPercentage is number && data.averageViewPercentage >= 0 && data.averageViewPercentage <= 1000))
+        && optionalNonNegativeInt(data, 'estimatedRevenueMicros', 2000000000000000)
+        && optionalNonNegativeInt(data, 'thumbnailImpressions', 2000000000)
+        && (!('thumbnailCtrPercent' in data) || (data.thumbnailCtrPercent is number && data.thumbnailCtrPercent >= 0 && data.thumbnailCtrPercent <= 100))
+        && (!('revenueCurrency' in data) || data.revenueCurrency in ['IDR', 'USD']);
+    }
+
+    function validAnalyticsSnapshot(data) {
+      return hasKeys(
+          data,
+          [
+            'channelId', 'youtubeChannelId', 'snapshotDate', 'views', 'watchTimeMinutes',
+            'subscribersGained', 'likes', 'comments', 'shares', 'fetchedAt', 'createdAt', 'updatedAt'
+          ],
+          [
+            'channelId', 'youtubeChannelId', 'snapshotDate', 'views', 'watchTimeMinutes',
+            'subscribersGained', 'likes', 'comments', 'shares', 'fetchedAt', 'createdAt', 'updatedAt',
+            'averageViewDurationSeconds', 'averageViewPercentage', 'estimatedRevenueMicros',
+            'periodStart', 'periodEnd', 'periodDays', 'channelTitle', 'connectedGoogleEmail',
+            'engagedViews', 'subscribersLost', 'channelSubscriberCount',
+            'dailyRowsJson', 'topVideosJson', 'trafficSourcesJson', 'topCountriesJson', 'deviceBreakdownJson', 'operatingSystemsJson', 'videoReachJson', 'reachReportStatus', 'revenueCurrency', 'dataWarningsJson', 'source', 'thumbnailImpressions', 'thumbnailCtrPercent'
+          ]
+        )
+        && validChannelId(data.channelId)
+        && data.youtubeChannelId is string && data.youtubeChannelId.size() > 0 && data.youtubeChannelId.size() <= 80
+        && data.snapshotDate is string && data.snapshotDate.size() == 10
+        && optionalNonNegativeInt(data, 'views', 2000000000)
+        && optionalNonNegativeInt(data, 'watchTimeMinutes', 2000000000)
+        && optionalNonNegativeInt(data, 'subscribersGained', 2000000000)
+        && optionalNonNegativeInt(data, 'subscribersLost', 2000000000)
+        && optionalNonNegativeInt(data, 'engagedViews', 2000000000)
+        && optionalNonNegativeInt(data, 'channelSubscriberCount', 2000000000)
+        && optionalNonNegativeInt(data, 'likes', 2000000000)
+        && optionalNonNegativeInt(data, 'comments', 2000000000)
+        && optionalNonNegativeInt(data, 'shares', 2000000000)
+        && optionalString(data, 'periodStart', 10)
+        && optionalString(data, 'periodEnd', 10)
+        && (!(('periodDays') in data) || (data.periodDays is int && data.periodDays in [1, 7, 28, 30, 90]))
+        && optionalString(data, 'channelTitle', 120)
+        && optionalString(data, 'connectedGoogleEmail', 254)
+        && optionalString(data, 'dailyRowsJson', 60000)
+        && optionalString(data, 'topVideosJson', 60000)
+        && optionalString(data, 'trafficSourcesJson', 12000)
+        && optionalString(data, 'topCountriesJson', 12000)
+        && optionalString(data, 'deviceBreakdownJson', 12000)
+        && optionalString(data, 'operatingSystemsJson', 12000)
+        && optionalString(data, 'videoReachJson', 12000)
+        && (!('reachReportStatus' in data) || data.reachReportStatus in ['ready', 'pending', 'unavailable'])
+        && (!('revenueCurrency' in data) || data.revenueCurrency in ['IDR', 'USD'])
+        && optionalString(data, 'dataWarningsJson', 4000)
+        && optionalString(data, 'source', 120)
+        && (!('averageViewDurationSeconds' in data)
+          || (data.averageViewDurationSeconds is number && data.averageViewDurationSeconds >= 0))
+        && (!('averageViewPercentage' in data)
+          || (data.averageViewPercentage is number && data.averageViewPercentage >= 0 && data.averageViewPercentage <= 1000))
+        && optionalNonNegativeInt(data, 'estimatedRevenueMicros', 2000000000000000)
+        && optionalNonNegativeInt(data, 'thumbnailImpressions', 2000000000)
+        && (!('thumbnailCtrPercent' in data) || (data.thumbnailCtrPercent is number && data.thumbnailCtrPercent >= 0 && data.thumbnailCtrPercent <= 100))
+        && data.fetchedAt is timestamp
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validAsset(data) {
+      return hasKeys(
+          data,
+          ['contentId', 'channelId', 'assetType', 'fileName', 'mimeType', 'sizeBytes', 'storageType', 'assetRef', 'createdAt'],
+          [
+            'contentId', 'channelId', 'assetType', 'fileName', 'mimeType', 'sizeBytes',
+            'storageType', 'assetRef', 'createdAt', 'agentId', 'durationSeconds',
+            'width', 'height', 'checksum', 'notes'
+          ]
+        )
+        && data.contentId is string && data.contentId.size() <= 128
+        && validChannelId(data.channelId)
+        && data.assetType in ['image', 'video', 'audio', 'thumbnail', 'subtitle', 'other']
+        && data.fileName is string && data.fileName.size() > 0 && data.fileName.size() <= 255
+        && data.mimeType is string && data.mimeType.size() <= 100
+        && data.sizeBytes is int && data.sizeBytes >= 0 && data.sizeBytes <= 10737418240
+        && data.storageType in ['local_worker', 'external_url']
+        && data.assetRef is string && data.assetRef.size() > 0 && data.assetRef.size() <= 1000
+        && data.createdAt is timestamp
+        && optionalString(data, 'agentId', 60)
+        && optionalNonNegativeInt(data, 'durationSeconds', 86400)
+        && optionalNonNegativeInt(data, 'width', 20000)
+        && optionalNonNegativeInt(data, 'height', 20000)
+        && optionalString(data, 'checksum', 128)
+        && optionalString(data, 'notes', 1000);
+    }
+
+    function validSchedule(data) {
+      return hasKeys(
+          data,
+          ['contentId', 'channelId', 'scheduledAt', 'timezone', 'status', 'createdAt', 'updatedAt'],
+          [
+            'contentId', 'channelId', 'scheduledAt', 'timezone', 'status', 'createdAt', 'updatedAt',
+            'youtubeVideoId', 'privacyStatus', 'publishedAt', 'errorMessage'
+          ]
+        )
+        && data.contentId is string && data.contentId.size() <= 128
+        && validChannelId(data.channelId)
+        && data.scheduledAt is timestamp
+        && data.timezone == 'Asia/Jakarta'
+        && data.status in ['scheduled', 'paused', 'cancelled', 'published', 'failed']
+        && optionalString(data, 'youtubeVideoId', 40)
+        && (!('privacyStatus' in data) || data.privacyStatus in ['private', 'unlisted', 'public'])
+        && optionalTimestamp(data, 'publishedAt')
+        && optionalString(data, 'errorMessage', 2000)
+        && data.createdAt is timestamp
+        && data.updatedAt is timestamp;
+    }
+
+    function validWorkerStatus(data) {
+      return hasKeys(
+          data,
+          ['deviceName', 'status', 'appVersion', 'operatingSystem', 'timezone', 'lastSeenAt', 'updatedAt'],
+          [
+            'deviceName', 'status', 'appVersion', 'operatingSystem', 'timezone', 'lastSeenAt', 'updatedAt',
+            'currentTaskId', 'currentAgentId', 'currentJobId'
+          ]
+        )
+        && data.deviceName is string && data.deviceName.size() > 0 && data.deviceName.size() <= 100
+        && data.status in ['online', 'busy', 'paused', 'sunday_pause', 'offline', 'error']
+        && data.appVersion is string && data.appVersion.size() <= 40
+        && data.operatingSystem is string && data.operatingSystem.size() <= 80
+        && data.timezone == 'Asia/Jakarta'
+        && data.lastSeenAt is timestamp
+        && data.updatedAt is timestamp
+        && optionalString(data, 'currentTaskId', 128)
+        && optionalString(data, 'currentAgentId', 60)
+        && optionalString(data, 'currentJobId', 128);
+    }
+
+    // ---------------------- USER PROFILE -----------------------
+    match /users/{uid} {
+      allow get: if isGoogleOwner(uid);
+      allow list: if false;
+      allow create: if isGoogleOwner(uid)
+        && validProfile(request.resource.data, uid)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && validProfile(request.resource.data, uid)
+        && request.resource.data.email == resource.data.email
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['displayName', 'updatedAt']);
+      allow delete: if false;
+    }
+
+    // Existing v0.4 content queue.
+    match /users/{uid}/jobs/{jobId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validJob(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && validJob(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'title', 'channelId', 'format', 'status', 'targetDate', 'notes', 'updatedAt'
+        ]);
+      allow delete: if isGoogleOwner(uid);
+    }
+
+    // Owner workspace settings: office, automation policy, and safe public YouTube OAuth Client ID.
+    match /users/{uid}/settings/{settingId} {
+      allow read: if isGoogleOwner(uid) && settingId in ['office', 'automation', 'youtubeOAuth'];
+      allow create, update: if isGoogleOwner(uid)
+        && settingId == 'office'
+        && validOfficeSettings(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
+      allow create, update: if isGoogleOwner(uid)
+        && settingId == 'automation'
+        && validAutomationSettings(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
+      allow create, update: if isGoogleOwner(uid)
+        && settingId == 'youtubeOAuth'
+        && validYoutubeOAuthSettings(request.resource.data)
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // YouTube channel metadata only. OAuth tokens/secrets are forbidden here.
+    match /users/{uid}/channels/{channelId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validChannel(request.resource.data, channelId)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && validChannel(request.resource.data, channelId)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Detailed scripts and finished-content records. Binary video files are not stored here.
+    match /users/{uid}/contents/{contentId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validContent(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && validContent(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Work queue for the Windows 10 production worker.
+    match /users/{uid}/productionTasks/{taskId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validProductionTask(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && validProductionTask(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Individual AI-agent execution records. Completed records cannot be rewritten.
+    match /users/{uid}/agentRuns/{runId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validAgentRun(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && resource.data.status in ['queued', 'running', 'paused']
+        && validAgentRun(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.agentId == resource.data.agentId
+        && request.resource.data.taskType == resource.data.taskType
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Append-only event history: records are readable by owner, never edited/deleted.
+    match /users/{uid}/activityLogs/{logId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validActivityLog(request.resource.data)
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // YouTube upload ledger: one document per successfully-created YouTube video.
+    match /users/{uid}/uploads/{uploadId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validUpload(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.status in ['uploaded', 'processing', 'scheduled', 'published'];
+      allow update: if isGoogleOwner(uid)
+        && validUpload(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.channelId == resource.data.channelId
+        && request.resource.data.youtubeChannelId == resource.data.youtubeChannelId
+        && request.resource.data.youtubeVideoId == resource.data.youtubeVideoId
+        && request.resource.data.uploadedAt == resource.data.uploadedAt
+        && request.resource.data.updatedAt == request.time
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'status', 'privacyStatus', 'publishedAt', 'lastCheckedAt',
+          'viewCount', 'likeCount', 'commentCount', 'updatedAt'
+        ]);
+      allow delete: if false;
+    }
+
+    // Daily/weekly/monthly production and channel reports.
+    match /users/{uid}/reports/{reportId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validReport(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.generatedAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // Daily YouTube Analytics snapshots per channel.
+    match /users/{uid}/analyticsSnapshots/{snapshotId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validAnalyticsSnapshot(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && validAnalyticsSnapshot(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.channelId == resource.data.channelId
+        && request.resource.data.youtubeChannelId == resource.data.youtubeChannelId
+        && request.resource.data.snapshotDate == resource.data.snapshotDate
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Asset metadata only. Actual media files remain on the Windows worker/local storage.
+    match /users/{uid}/contentAssets/{assetId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validAsset(request.resource.data)
+        && request.resource.data.createdAt == request.time;
+      allow update, delete: if false;
+    }
+
+    // Publication calendar. Cancel records rather than deleting history.
+    match /users/{uid}/schedules/{scheduleId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validSchedule(request.resource.data)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && validSchedule(request.resource.data)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Status of the local Windows 10 worker. No machine passwords or secrets here.
+    match /users/{uid}/workerStatus/{workerId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validWorkerStatus(request.resource.data)
+        && request.resource.data.lastSeenAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && validWorkerStatus(request.resource.data)
+        && request.resource.data.lastSeenAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+
+
+    // Bible Series Generator: owner-scoped metadata and episode plans only.
+    // Uploaded Bible verse text is stored only on the local Worker; Firestore stores metadata only.
+    match /users/{uid}/bibleSeries/{seriesId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validBibleSeries(request.resource.data, seriesId)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && validBibleSeries(request.resource.data, seriesId)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    match /users/{uid}/bibleEpisodes/{episodeId} {
+      allow read: if isGoogleOwner(uid);
+      allow create: if isGoogleOwner(uid)
+        && validBibleEpisode(request.resource.data, episodeId)
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.updatedAt == request.time;
+      allow update: if isGoogleOwner(uid)
+        && validBibleEpisode(request.resource.data, episodeId)
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt == request.time;
+      allow delete: if false;
+    }
+
+    // Default-deny: every future collection must be explicitly added above.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

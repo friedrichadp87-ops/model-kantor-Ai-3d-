@@ -1,6 +1,14 @@
 import * as THREE from 'three';
-import { getHumanAppearance } from './humanAppearance';
-import { OFFICE_DIMENSIONS, WORKSTATIONS } from './layout';
+import {
+  BUILDING_FLOORS,
+  FLOOR_HEIGHT,
+  FLOOR_ORDER,
+  getFloorEmployeeIdentity,
+  getFloorHumanAppearance,
+  type FloorConfig,
+  type FloorId,
+} from './buildingFloors';
+import { AGENT_ORDER, OFFICE_DIMENSIONS, WORKSTATIONS } from './layout';
 import type { OfficeTexturePack } from './textures';
 import type { AgentId } from './types';
 
@@ -12,6 +20,7 @@ export interface ServerLedRef {
 
 export interface AgentVisualRig {
   id: AgentId;
+  floorId: FloorId;
   root: THREE.Group;
   bodyGroup: THREE.Group;
   headGroup: THREE.Group;
@@ -29,27 +38,36 @@ export interface AgentVisualRig {
 
 export interface OfficeSceneParts {
   root: THREE.Group;
+  floorGroups: Record<FloorId, THREE.Group>;
+  elevatorCab: THREE.Group;
   serverLeds: ServerLedRef[];
   interiorLampMaterials: THREE.MeshStandardMaterial[];
   monitorScreenMaterials: THREE.MeshStandardMaterial[];
-  meetingScreenMesh: THREE.Mesh;
-  meetingScreenMat: THREE.MeshStandardMaterial;
-  galleryArtMesh: THREE.Mesh;
-  galleryArtMat: THREE.MeshStandardMaterial;
-  agentRigs: Record<AgentId, AgentVisualRig>;
-  interactables: THREE.Object3D[];
+  meetingScreensByFloor: Record<FloorId, { mesh: THREE.Mesh; mat: THREE.MeshStandardMaterial }>;
+  galleryArtByFloor: Record<FloorId, { mesh: THREE.Mesh; mat: THREE.MeshStandardMaterial }>;
+  agentRigsByFloor: Record<FloorId, Record<AgentId, AgentVisualRig>>;
+  interactablesByFloor: Record<FloorId, THREE.Object3D[]>;
 }
 
 export function buildOfficeScene(
   textures: OfficeTexturePack,
-  isSoftwareGl: boolean,
-  agentMeta: Array<{ id: AgentId; tagLabel: string; accentHex: string }>
+  isSoftwareGl: boolean
 ): OfficeSceneParts {
   const root = new THREE.Group();
   const serverLeds: ServerLedRef[] = [];
   const interiorLampMaterials: THREE.MeshStandardMaterial[] = [];
   const monitorScreenMaterials: THREE.MeshStandardMaterial[] = [];
-  const interactables: THREE.Object3D[] = [];
+  const floorGroups = {} as Record<FloorId, THREE.Group>;
+  const meetingScreensByFloor = {} as Record<
+    FloorId,
+    { mesh: THREE.Mesh; mat: THREE.MeshStandardMaterial }
+  >;
+  const galleryArtByFloor = {} as Record<
+    FloorId,
+    { mesh: THREE.Mesh; mat: THREE.MeshStandardMaterial }
+  >;
+  const agentRigsByFloor = {} as Record<FloorId, Record<AgentId, AgentVisualRig>>;
+  const interactablesByFloor = {} as Record<FloorId, THREE.Object3D[]>;
 
   // Shared calibrated PBR materials (varying roughness >= 0.25 between adjacent surfaces)
   const mats = {
@@ -102,11 +120,7 @@ export function buildOfficeScene(
     }),
   };
 
-  // 1. ARCHITECTURAL SHELL & PLINTH
-  const shell = buildArchitecturalShell(mats, textures, interiorLampMaterials);
-  root.add(shell);
-
-  // 2. WORKSTATIONS (13 Named AI Agent Desks)
+  // Shared screen materials across all 3 floors (low GPU state switches)
   const screenMatByVariant: Record<
     'roadmap' | 'code' | 'design' | 'analytics' | 'coordination',
     THREE.MeshStandardMaterial
@@ -159,152 +173,485 @@ export function buildOfficeScene(
   };
   monitorScreenMaterials.push(...Object.values(screenMatByVariant));
 
-  for (const ws of WORKSTATIONS) {
-    const deskGroup = createWorkstation(
-      mats,
-      screenMatByVariant[ws.screenVariant],
-      Boolean(ws.dualMonitor)
-    );
-    deskGroup.position.set(ws.deskX, 0, ws.deskZ);
-    root.add(deskGroup);
-
-    const chair = createOfficeChair(mats);
-    chair.position.set(ws.chairX, 0, ws.chairZ);
-    chair.rotation.y = Math.PI;
-    root.add(chair);
-  }
-
-  // 3. GLASS MEETING ROOM FURNITURE
-  const meetingScreenMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    map: textures.screens.meeting,
-    emissive: new THREE.Color(0xbfdbfe),
-    emissiveMap: textures.screens.meeting,
-    emissiveIntensity: 0.65,
-    roughness: 0.22,
-    metalness: 0.08,
-  });
-  monitorScreenMaterials.push(meetingScreenMat);
-  const { group: meetingGroup, tvScreen: meetingScreenMesh } = createMeetingRoomFurniture(
-    mats,
-    meetingScreenMat,
-    interiorLampMaterials
-  );
-  root.add(meetingGroup);
-
-  // 3B. COMPOSITE 3D MEDIA GALLERY FRAME (North Wall above Engineering/Design Bay)
-  const galleryArtMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    map: textures.screens.design,
-    emissive: new THREE.Color(0xfffbeb),
-    emissiveMap: textures.screens.design,
-    emissiveIntensity: 0.22,
-    roughness: 0.34,
-    metalness: 0.04,
-  });
-  const { group: galleryFrameGroup, artMesh: galleryArtMesh } = createMediaGalleryDisplay(
-    mats,
-    galleryArtMat,
-    interiorLampMaterials
-  );
-  galleryFrameGroup.position.set(7.7, 2.08, -7.82);
-  root.add(galleryFrameGroup);
-
-  // 3C. COMPOSITE 9-PART 3D CINEMA & STUDIO PRODUCTION PEDESTAL (South-Central Creative Bay)
-  const mediaPedestal = createMediaStudioPedestal(mats, textures.contactShadow, serverLeds);
-  mediaPedestal.position.set(0.15, 0, 5.45);
-  mediaPedestal.rotation.y = -Math.PI * 0.28;
-  root.add(mediaPedestal);
-
-  // 4. AI SERVER CORE (3 Tall Multi-Part Server Racks)
-  const rackXs = [1.3, 2.6, 3.9];
-  rackXs.forEach((rx, idx) => {
-    const rack = createServerRack(mats, serverLeds, idx);
-    rack.position.set(rx, 0.02, -6.7);
-    root.add(rack);
-  });
-
-  // 5. COFFEE BAR & COLLABORATION LOUNGE
-  root.add(createCoffeeLounge(mats, textures));
-
-  // 6. WHITEBOARD EASEL & ARCHITECTURAL BOOKSHELF + INDOOR PLANTS
-  const whiteboard = createWhiteboardEasel(mats, textures.whiteboard);
-  whiteboard.position.set(10.35, 0, 0.75);
-  whiteboard.rotation.y = -Math.PI * 0.5;
-  root.add(whiteboard);
-
-  const bookshelf = createBookshelf(mats);
-  bookshelf.position.set(-10.52, 0, -4.4);
-  bookshelf.rotation.y = Math.PI / 2;
-  root.add(bookshelf);
-
-  // Indoor architectural trees placed cleanly in corners & zone anchors
-  const plantPlacements = [
-    { x: -10.15, z: -7.1, scale: 1.04 },
-    { x: -10.0, z: 6.7, scale: 0.96 },
-    { x: 10.25, z: -7.1, scale: 1.02 },
-    { x: 3.1, z: 6.7, scale: 0.92 },
-    { x: -1.2, z: -7.15, scale: 0.85 },
-  ];
-  for (const p of plantPlacements) {
-    const plant = createIndoorPlant(mats, p.scale);
-    plant.position.set(p.x, 0, p.z);
-    root.add(plant);
-  }
-
-  // 7. 13 COMPOSITE ARTICULATED 3D HUMAN STUDIO TEAM CHARACTERS WITH FLOATING NAMETAGS
+  // Shared human character geometry pool across all 39 employees
   const humanPool = createHumanSharedPool();
-  const agentRigs = {} as Record<AgentId, AgentVisualRig>;
-  for (const meta of agentMeta) {
-    const rig = createAgentRig(
-      meta.id,
-      meta.tagLabel,
-      meta.accentHex,
-      textures.contactShadow,
-      humanPool
+
+  // Shared tower spine: 4 structural steel/concrete corner columns + panoramic glass elevator
+  const { towerSpine, elevatorCab } = buildTowerCoreStructure(mats, interiorLampMaterials);
+  root.add(towerSpine);
+
+  // Build all 3 architectural floors (L1: Daily Faith, L2: Bible Stories 3D, L3: Bible Facts)
+  for (const floorId of FLOOR_ORDER) {
+    const floorCfg = BUILDING_FLOORS[floorId];
+    const floorGroup = new THREE.Group();
+    floorGroup.name = `floor_${floorId}`;
+    floorGroup.position.y = floorCfg.elevationY;
+    floorGroups[floorId] = floorGroup;
+    root.add(floorGroup);
+
+    // 1. Floor Architectural Shell + Channel Fascia Plaque
+    const shell = buildArchitecturalShell(mats, textures, interiorLampMaterials, floorCfg);
+    floorGroup.add(shell);
+
+    // 2. 13 Workstations on this floor
+    for (const ws of WORKSTATIONS) {
+      const deskGroup = createWorkstation(
+        mats,
+        screenMatByVariant[ws.screenVariant],
+        Boolean(ws.dualMonitor)
+      );
+      deskGroup.position.set(ws.deskX, 0, ws.deskZ);
+      floorGroup.add(deskGroup);
+
+      const chair = createOfficeChair(mats);
+      chair.position.set(ws.chairX, 0, ws.chairZ);
+      chair.rotation.y = Math.PI;
+      floorGroup.add(chair);
+    }
+
+    // 3. Glass Meeting Room Furniture & Per-Floor Projection Screen
+    const meetingScreenMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      map: textures.screens.meeting,
+      emissive: new THREE.Color(0xbfdbfe),
+      emissiveMap: textures.screens.meeting,
+      emissiveIntensity: 0.65,
+      roughness: 0.22,
+      metalness: 0.08,
+    });
+    monitorScreenMaterials.push(meetingScreenMat);
+    const { group: meetingGroup, tvScreen: meetingScreenMesh } = createMeetingRoomFurniture(
+      mats,
+      meetingScreenMat,
+      interiorLampMaterials
     );
-    agentRigs[meta.id] = rig;
-    root.add(rig.root);
-    interactables.push(rig.hitbox);
+    floorGroup.add(meetingGroup);
+    meetingScreensByFloor[floorId] = { mesh: meetingScreenMesh, mat: meetingScreenMat };
+
+    // 3B. Media Gallery Frame on North Wall
+    const galleryArtMat = new THREE.MeshStandardMaterial({
+      color: 0xffffff,
+      map: textures.screens.design,
+      emissive: new THREE.Color(0xfffbeb),
+      emissiveMap: textures.screens.design,
+      emissiveIntensity: 0.22,
+      roughness: 0.34,
+      metalness: 0.04,
+    });
+    const { group: galleryFrameGroup, artMesh: galleryArtMesh } = createMediaGalleryDisplay(
+      mats,
+      galleryArtMat,
+      interiorLampMaterials
+    );
+    galleryFrameGroup.position.set(7.7, 2.08, -7.82);
+    floorGroup.add(galleryFrameGroup);
+    galleryArtByFloor[floorId] = { mesh: galleryArtMesh, mat: galleryArtMat };
+
+    // 3C. Studio Production Pedestal
+    const mediaPedestal = createMediaStudioPedestal(mats, textures.contactShadow, serverLeds);
+    mediaPedestal.position.set(0.15, 0, 5.45);
+    mediaPedestal.rotation.y = -Math.PI * 0.28;
+    floorGroup.add(mediaPedestal);
+
+    // 4. AI Server Core (3 Server Racks per floor)
+    const rackXs = [1.3, 2.6, 3.9];
+    rackXs.forEach((rx, idx) => {
+      const rack = createServerRack(mats, serverLeds, idx + (floorId - 1) * 3);
+      rack.position.set(rx, 0.02, -6.7);
+      floorGroup.add(rack);
+    });
+
+    // 5. Coffee Bar & Collaboration Lounge
+    floorGroup.add(createCoffeeLounge(mats, textures));
+
+    // 6. Whiteboard, Bookshelf & Indoor Plants
+    const whiteboard = createWhiteboardEasel(mats, textures.whiteboard);
+    whiteboard.position.set(10.35, 0, 0.75);
+    whiteboard.rotation.y = -Math.PI * 0.5;
+    floorGroup.add(whiteboard);
+
+    const bookshelf = createBookshelf(mats);
+    bookshelf.position.set(-10.52, 0, -4.4);
+    bookshelf.rotation.y = Math.PI / 2;
+    floorGroup.add(bookshelf);
+
+    const plantPlacements = [
+      { x: -10.15, z: -7.1, scale: 1.04 },
+      { x: -10.0, z: 6.7, scale: 0.96 },
+      { x: 10.25, z: -7.1, scale: 1.02 },
+      { x: 3.1, z: 6.7, scale: 0.92 },
+      { x: -1.2, z: -7.15, scale: 0.85 },
+    ];
+    for (const p of plantPlacements) {
+      const plant = createIndoorPlant(mats, p.scale);
+      plant.position.set(p.x, 0, p.z);
+      floorGroup.add(plant);
+    }
+
+    // 7. 13 Human AI Employees for this floor (total 39 across 3 floors)
+    const floorRigs = {} as Record<AgentId, AgentVisualRig>;
+    const floorInteractables: THREE.Object3D[] = [];
+    for (const agentId of AGENT_ORDER) {
+      const identity = getFloorEmployeeIdentity(floorId, agentId);
+      const rig = createAgentRig(
+        floorId,
+        agentId,
+        identity.tagLabel,
+        identity.accentHex,
+        textures.contactShadow,
+        humanPool
+      );
+      floorRigs[agentId] = rig;
+      floorGroup.add(rig.root);
+      floorInteractables.push(rig.hitbox);
+    }
+    agentRigsByFloor[floorId] = floorRigs;
+    interactablesByFloor[floorId] = floorInteractables;
   }
 
   return {
     root,
+    floorGroups,
+    elevatorCab,
     serverLeds,
     interiorLampMaterials,
     monitorScreenMaterials,
-    meetingScreenMesh,
-    meetingScreenMat,
-    galleryArtMesh,
-    galleryArtMat,
-    agentRigs,
-    interactables,
+    meetingScreensByFloor,
+    galleryArtByFloor,
+    agentRigsByFloor,
+    interactablesByFloor,
   };
+}
+
+/**
+ * Creates a crisp procedural CanvasTexture architectural plaque showing Floor + Channel + API slot.
+ */
+function createFloorSignTexture(floorCfg: FloorConfig): THREE.CanvasTexture {
+  const canvas = document.createElement('canvas');
+  canvas.width = 768;
+  canvas.height = 128;
+  const ctx = canvas.getContext('2d')!;
+
+  ctx.fillStyle = '#0f172a';
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Left channel color accent bar
+  ctx.fillStyle = floorCfg.accentHex;
+  ctx.fillRect(0, 0, 22, canvas.height);
+
+  // Bottom hairline highlight
+  ctx.fillStyle = floorCfg.accentHex;
+  ctx.fillRect(0, canvas.height - 8, canvas.width, 8);
+
+  ctx.fillStyle = '#f8fafc';
+  ctx.font = '700 38px "Plus Jakarta Sans", system-ui, sans-serif';
+  ctx.fillText(
+    `LANTAI ${floorCfg.floorId}  ·  ${floorCfg.channelName.toUpperCase()}`,
+    44,
+    58
+  );
+
+  ctx.fillStyle = '#94a3b8';
+  ctx.font = '500 22px "IBM Plex Mono", monospace';
+  ctx.fillText(`13 AGEN AI  ·  API SLOT: ${floorCfg.geminiEnvVar}`, 44, 98);
+
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
+}
+
+/**
+ * Builds the 4 full-height structural corner columns and an exterior panoramic glass elevator shaft
+ * connecting Lantai 1, Lantai 2, and Lantai 3 into one unified architectural tower.
+ */
+function buildTowerCoreStructure(
+  mats: Record<string, THREE.Material>,
+  interiorLampMaterials: THREE.MeshStandardMaterial[]
+): { towerSpine: THREE.Group; elevatorCab: THREE.Group } {
+  const towerSpine = new THREE.Group();
+  const { width, depth, wallHeight, plinthHeight } = OFFICE_DIMENSIONS;
+  // Rear/side corner structural columns are built per-floor inside buildArchitecturalShell
+  // so cutaway views never leave floating columns sticking up above the active story,
+  // and the front South-East cutaway corner stays 100% open and unobstructed.
+
+  // Panoramic Glass Elevator Shaft on the East exterior wing (x = 12.0, z = -4.6)
+  const totalHeight = FLOOR_HEIGHT * 2 + wallHeight + 0.35;
+  const shaftX = width / 2 + 1.05;
+  const shaftZ = -4.6;
+  const shaftW = 1.9;
+  const shaftD = 2.1;
+  const shaftGroup = new THREE.Group();
+  shaftGroup.position.set(shaftX, 0, shaftZ);
+
+  // Elevator shaft structural base pad
+  const shaftBase = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW + 0.24, plinthHeight + 0.12, shaftD + 0.24),
+    mats.plinth
+  );
+  shaftBase.position.set(0, -plinthHeight / 2 - 0.06, 0);
+  shaftGroup.add(shaftBase);
+
+  // 4 Vertical matte-black elevator guide rails
+  const railGeo = new THREE.BoxGeometry(0.1, totalHeight, 0.1);
+  [
+    [-shaftW / 2, -shaftD / 2],
+    [shaftW / 2, -shaftD / 2],
+    [-shaftW / 2, shaftD / 2],
+    [shaftW / 2, shaftD / 2],
+  ].forEach(([rx, rz]) => {
+    const rail = new THREE.Mesh(railGeo, mats.matteBlackMetal);
+    rail.position.set(rx, totalHeight / 2, rz);
+    shaftGroup.add(rail);
+  });
+
+  // Shaft rooftop cap & motor housing
+  const shaftCap = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW + 0.2, 0.36, shaftD + 0.2),
+    mats.matteBlackMetal
+  );
+  shaftCap.position.set(0, totalHeight + 0.18, 0);
+  shaftGroup.add(shaftCap);
+
+  // Glass panoramic shaft enclosure panels (East, North, South)
+  const glassEast = new THREE.Mesh(
+    new THREE.BoxGeometry(0.04, totalHeight - 0.1, shaftD - 0.14),
+    mats.windowGlass
+  );
+  glassEast.position.set(shaftW / 2, totalHeight / 2, 0);
+  glassEast.renderOrder = 3;
+  shaftGroup.add(glassEast);
+
+  const glassSouth = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW - 0.14, totalHeight - 0.1, 0.04),
+    mats.windowGlass
+  );
+  glassSouth.position.set(0, totalHeight / 2, shaftD / 2);
+  glassSouth.renderOrder = 3;
+  shaftGroup.add(glassSouth);
+
+  // Floor landing bridges linking shaft to each floor slab
+  for (const floorId of FLOOR_ORDER) {
+    const y = BUILDING_FLOORS[floorId].elevationY;
+    const bridge = new THREE.Mesh(
+      new THREE.BoxGeometry(0.45, 0.14, shaftD),
+      mats.plinthTrim
+    );
+    bridge.position.set(-shaftW / 2 - 0.1, y - 0.07, 0);
+    shaftGroup.add(bridge);
+
+    const floorDot = new THREE.Mesh(
+      new THREE.BoxGeometry(0.06, 0.14, 0.6),
+      new THREE.MeshStandardMaterial({
+        color: BUILDING_FLOORS[floorId].accentColorNum,
+        emissive: BUILDING_FLOORS[floorId].accentColorNum,
+        emissiveIntensity: 1.1,
+        roughness: 0.25,
+      })
+    );
+    floorDot.position.set(shaftW / 2 + 0.03, y + 2.45, 0);
+    shaftGroup.add(floorDot);
+  }
+
+  // Animated Glass & Brass Elevator Cab
+  const elevatorCab = new THREE.Group();
+  elevatorCab.position.set(0, 0.06, 0);
+
+  const cabFloor = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW - 0.28, 0.1, shaftD - 0.28),
+    mats.walnutWood
+  );
+  cabFloor.position.y = 0.05;
+  elevatorCab.add(cabFloor);
+
+  const cabCeiling = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW - 0.28, 0.12, shaftD - 0.28),
+    mats.matteBlackMetal
+  );
+  cabCeiling.position.y = 2.35;
+  elevatorCab.add(cabCeiling);
+
+  const cabLightMat = new THREE.MeshStandardMaterial({
+    color: 0xfffbeb,
+    emissive: new THREE.Color(0xfef3c7),
+    emissiveIntensity: 1.4,
+    roughness: 0.2,
+  });
+  interiorLampMaterials.push(cabLightMat);
+  const cabLight = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW - 0.56, 0.04, shaftD - 0.56),
+    cabLightMat
+  );
+  cabLight.position.y = 2.28;
+  elevatorCab.add(cabLight);
+
+  const cabBrassTrim = new THREE.Mesh(
+    new THREE.BoxGeometry(shaftW - 0.24, 0.05, shaftD - 0.24),
+    mats.brassAccent
+  );
+  cabBrassTrim.position.y = 2.43;
+  elevatorCab.add(cabBrassTrim);
+
+  // Cab corner struts
+  const cabPostGeo = new THREE.BoxGeometry(0.06, 2.25, 0.06);
+  [
+    [-(shaftW - 0.34) / 2, -(shaftD - 0.34) / 2],
+    [(shaftW - 0.34) / 2, -(shaftD - 0.34) / 2],
+    [-(shaftW - 0.34) / 2, (shaftD - 0.34) / 2],
+    [(shaftW - 0.34) / 2, (shaftD - 0.34) / 2],
+  ].forEach(([px, pz]) => {
+    const post = new THREE.Mesh(cabPostGeo, mats.brassAccent);
+    post.position.set(px, 1.18, pz);
+    elevatorCab.add(post);
+  });
+
+  shaftGroup.add(elevatorCab);
+  towerSpine.add(shaftGroup);
+
+  return { towerSpine, elevatorCab };
 }
 
 function buildArchitecturalShell(
   mats: Record<string, THREE.Material>,
   _textures: OfficeTexturePack,
-  interiorLampMaterials: THREE.MeshStandardMaterial[]
+  interiorLampMaterials: THREE.MeshStandardMaterial[],
+  floorCfg: FloorConfig
 ): THREE.Group {
   const group = new THREE.Group();
   const { width, depth, wallHeight, plinthHeight } = OFFICE_DIMENSIONS;
 
-  // Raised architectural plinth slab with metallic bevel trim (strictly below floor slab to prevent Z-fighting)
-  const plinth = new THREE.Mesh(
-    new THREE.BoxGeometry(width + 0.8, plinthHeight, depth + 0.8),
-    mats.plinth
-  );
-  plinth.position.set(0, -plinthHeight / 2 - 0.09, 0);
-  plinth.receiveShadow = true;
-  group.add(plinth);
+  const floorAccentMat = new THREE.MeshStandardMaterial({
+    color: floorCfg.accentColorNum,
+    emissive: floorCfg.accentColorNum,
+    emissiveIntensity: 0.35,
+    roughness: 0.28,
+    metalness: 0.35,
+  });
 
-  const plinthTrim = new THREE.Mesh(
-    new THREE.BoxGeometry(width + 0.86, 0.05, depth + 0.86),
-    mats.plinthTrim
+  if (floorCfg.floorId === 1) {
+    // Ground floor raised architectural plinth slab with metallic bevel trim
+    const plinth = new THREE.Mesh(
+      new THREE.BoxGeometry(width + 0.8, plinthHeight, depth + 0.8),
+      mats.plinth
+    );
+    plinth.position.set(0, -plinthHeight / 2 - 0.09, 0);
+    plinth.receiveShadow = true;
+    group.add(plinth);
+
+    const plinthTrim = new THREE.Mesh(
+      new THREE.BoxGeometry(width + 0.86, 0.05, depth + 0.86),
+      mats.plinthTrim
+    );
+    plinthTrim.position.set(0, -0.065, 0);
+    group.add(plinthTrim);
+  } else {
+    // Upper story inter-floor concrete & brushed-steel structural slab (top cleanly at y = -0.04)
+    const upperSlab = new THREE.Mesh(
+      new THREE.BoxGeometry(width + 0.56, 0.34, depth + 0.56),
+      mats.plinth
+    );
+    upperSlab.position.set(0, -0.21, 0);
+    upperSlab.castShadow = true;
+    upperSlab.receiveShadow = true;
+    group.add(upperSlab);
+
+    const slabTrim = new THREE.Mesh(
+      new THREE.BoxGeometry(width + 0.62, 0.06, depth + 0.62),
+      mats.plinthTrim
+    );
+    slabTrim.position.set(0, -0.055, 0);
+    group.add(slabTrim);
+
+    // Subtle glass cutaway safety railing along open South & East slab edges
+    const southGlass = new THREE.Mesh(
+      new THREE.BoxGeometry(width - 0.4, 0.72, 0.04),
+      mats.windowGlass
+    );
+    southGlass.position.set(0, 0.38, depth / 2 + 0.04);
+    southGlass.renderOrder = 3;
+    group.add(southGlass);
+
+    const southRail = new THREE.Mesh(
+      new THREE.BoxGeometry(width - 0.3, 0.045, 0.07),
+      mats.brushedSteel
+    );
+    southRail.position.set(0, 0.76, depth / 2 + 0.04);
+    group.add(southRail);
+
+    const eastGlass = new THREE.Mesh(
+      new THREE.BoxGeometry(0.04, 0.72, depth - 0.4),
+      mats.windowGlass
+    );
+    eastGlass.position.set(width / 2 + 0.04, 0.38, 0);
+    eastGlass.renderOrder = 3;
+    group.add(eastGlass);
+
+    const eastRail = new THREE.Mesh(
+      new THREE.BoxGeometry(0.07, 0.045, depth - 0.3),
+      mats.brushedSteel
+    );
+    eastRail.position.set(width / 2 + 0.04, 0.76, 0);
+    group.add(eastRail);
+  }
+
+  // Per-story structural corner columns on the 3 non-occluding corners (NW, NE, SW)
+  // so cutaway views hide upper columns cleanly and keep the front SE corner unobstructed.
+  const storyColH = floorCfg.floorId === 3 ? wallHeight + 0.28 : FLOOR_HEIGHT;
+  const storyColGeo = new THREE.BoxGeometry(0.32, storyColH, 0.32);
+  const storyColCapGeo = new THREE.BoxGeometry(0.38, 0.12, 0.38);
+  const rearCornerPositions: Array<[number, number]> = [
+    [-width / 2 - 0.22, -depth / 2 - 0.22],
+    [width / 2 + 0.14, -depth / 2 - 0.22],
+    [-width / 2 - 0.22, depth / 2 + 0.14],
+  ];
+  for (const [cx, cz] of rearCornerPositions) {
+    const col = new THREE.Mesh(storyColGeo, mats.matteBlackMetal);
+    col.position.set(cx, storyColH / 2 - 0.08, cz);
+    col.castShadow = true;
+    col.receiveShadow = true;
+    group.add(col);
+
+    const collar = new THREE.Mesh(storyColCapGeo, mats.brushedSteel);
+    collar.position.set(cx, -0.06, cz);
+    group.add(collar);
+  }
+
+  // Subtle low architectural corner shoe at the open South-East cutaway corner (zero occlusion)
+  const frontCornerShoe = new THREE.Mesh(
+    new THREE.BoxGeometry(0.28, 0.24, 0.28),
+    mats.brushedSteel
   );
-  plinthTrim.position.set(0, -0.065, 0);
-  group.add(plinthTrim);
+  frontCornerShoe.position.set(width / 2 + 0.12, -0.08, depth / 2 + 0.12);
+  group.add(frontCornerShoe);
+
+  // Channel-colored glowing fascia band along South & East slab edges
+  const southBand = new THREE.Mesh(
+    new THREE.BoxGeometry(width + 0.64, 0.07, 0.05),
+    floorAccentMat
+  );
+  southBand.position.set(0, -0.18, depth / 2 + 0.31);
+  group.add(southBand);
+
+  const eastBand = new THREE.Mesh(
+    new THREE.BoxGeometry(0.05, 0.07, depth + 0.64),
+    floorAccentMat
+  );
+  eastBand.position.set(width / 2 + 0.31, -0.18, 0);
+  group.add(eastBand);
+
+  // Crisp procedural CanvasTexture Floor + YouTube Channel Fascia Plaque on South edge
+  const signTex = createFloorSignTexture(floorCfg);
+  const signMat = new THREE.MeshStandardMaterial({
+    map: signTex,
+    emissive: new THREE.Color(0xffffff),
+    emissiveMap: signTex,
+    emissiveIntensity: 0.42,
+    roughness: 0.3,
+    metalness: 0.1,
+  });
+  const fasciaPlaque = new THREE.Mesh(new THREE.BoxGeometry(5.8, 0.72, 0.08), signMat);
+  fasciaPlaque.position.set(5.4, -0.18, depth / 2 + 0.36);
+  group.add(fasciaPlaque);
 
   // Main oak parquet floor (solid 0.04m slab with top cleanly at y = 0.0)
   const mainFloor = new THREE.Mesh(
@@ -472,13 +819,13 @@ function buildArchitecturalShell(
     group.add(diffuser);
   }
 
-  // Minimalist geometric studio emblem on North wall above Server Core
-  const signBacking = new THREE.Mesh(new THREE.BoxGeometry(2.6, 0.46, 0.06), mats.matteBlackMetal);
-  signBacking.position.set(2.6, 3.55, -7.86);
-  group.add(signBacking);
+  // Floor & Channel emblem on North wall above Server Core
+  const wallSignBoard = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.62, 0.06), signMat);
+  wallSignBoard.position.set(2.6, 3.56, -7.85);
+  group.add(wallSignBoard);
 
-  const signAccent = new THREE.Mesh(new THREE.BoxGeometry(2.46, 0.05, 0.07), mats.brassAccent);
-  signAccent.position.set(2.6, 3.35, -7.85);
+  const signAccent = new THREE.Mesh(new THREE.BoxGeometry(4.44, 0.05, 0.07), floorAccentMat);
+  signAccent.position.set(2.6, 3.22, -7.84);
   group.add(signAccent);
 
   return group;
@@ -1439,6 +1786,7 @@ function createHumanSharedPool(): HumanSharedPool {
 }
 
 function createAgentRig(
+  floorId: FloorId,
   id: AgentId,
   tagLabel: string,
   accentHex: string,
@@ -1446,9 +1794,9 @@ function createAgentRig(
   pool: HumanSharedPool
 ): AgentVisualRig {
   const root = new THREE.Group();
-  root.name = `agent_${id}`;
+  root.name = `agent_f${floorId}_${id}`;
 
-  const profile = getHumanAppearance(id);
+  const profile = getFloorHumanAppearance(floorId, id);
   const accentColor = new THREE.Color(accentHex);
 
   const skinMat = new THREE.MeshStandardMaterial({
@@ -1993,10 +2341,12 @@ function createAgentRig(
   const hitbox = new THREE.Mesh(pool.hitboxGeo, new THREE.MeshBasicMaterial({ visible: false }));
   hitbox.position.y = 0.95;
   hitbox.userData.agentId = id;
+  hitbox.userData.floorId = floorId;
   root.add(hitbox);
 
   return {
     id,
+    floorId,
     root,
     bodyGroup,
     headGroup,

@@ -10,6 +10,7 @@ import {
   Heart,
   HeartHandshake,
   Image as ImageIcon,
+  KeyRound,
   Loader2,
   Mic,
   PenTool,
@@ -30,23 +31,33 @@ import {
   type SpecialistAgentId,
   type SpecialistAgentProfile,
 } from '../office/agentRoster';
+import {
+  BUILDING_FLOORS,
+  FLOOR_ORDER,
+  TOTAL_BUILDING_EMPLOYEES,
+  getFloorEmployeeIdentity,
+  makeFloorAgentKey,
+  type BuildingSimulationState,
+  type FloorId,
+} from '../office/buildingFloors';
 import { ZONE_LABELS } from '../office/layout';
 import { validateTaskPrompt } from '../office/simulation';
-import type {
-  AgentId,
-  LightingPreset,
-  OfficeSimulationState,
-  TaskEntry,
-} from '../office/types';
+import type { LightingPreset, TaskEntry } from '../office/types';
 import type { WorkspaceDivisionId } from '../office/workspaceDivisions';
 
 interface AgentRosterDrawerProps {
-  simState: OfficeSimulationState;
+  buildingState: BuildingSimulationState;
+  activeFloorId: FloorId;
   lighting: LightingPreset;
   selectedSpecialistId: SpecialistAgentId | null;
-  tasksByAgent: Record<AgentId, TaskEntry[]>;
-  onSelectSpecialist: (specialist: SpecialistAgentProfile | null) => void;
-  onSubmitSpecialistTask: (specialist: SpecialistAgentProfile, prompt: string) => void;
+  tasksByFloorAgent: Record<string, TaskEntry[]>;
+  onSelectFloor: (floorId: FloorId) => void;
+  onSelectSpecialist: (floorId: FloorId, specialist: SpecialistAgentProfile | null) => void;
+  onSubmitSpecialistTask: (
+    floorId: FloorId,
+    specialist: SpecialistAgentProfile,
+    prompt: string
+  ) => void;
   onOpenDivision: (divisionId: WorkspaceDivisionId) => void;
   onClose: () => void;
 }
@@ -76,9 +87,11 @@ const GROUP_ORDER: AgentGroupFilter[] = [
 ];
 
 export function AgentRosterDrawer({
-  simState,
+  buildingState,
+  activeFloorId,
   selectedSpecialistId,
-  tasksByAgent,
+  tasksByFloorAgent,
+  onSelectFloor,
   onSelectSpecialist,
   onSubmitSpecialistTask,
   onOpenDivision,
@@ -91,23 +104,42 @@ export function AgentRosterDrawer({
   const searchId = useId();
   const taskInputId = useId();
 
-  const filteredAgents = useMemo(
-    () => filterSpecialists(SPECIALIST_AGENTS, groupFilter, searchQuery),
-    [groupFilter, searchQuery]
-  );
+  const floorCfg = BUILDING_FLOORS[activeFloorId];
+  const floorSim = buildingState.floors[activeFloorId];
+
+  const filteredAgents = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    const byGroup = filterSpecialists(SPECIALIST_AGENTS, groupFilter, '');
+    if (!q) return byGroup;
+    return byGroup.filter((agent) => {
+      const floorPerson = getFloorEmployeeIdentity(activeFloorId, agent.id);
+      return (
+        floorPerson.name.toLowerCase().includes(q) ||
+        agent.roleTitle.toLowerCase().includes(q) ||
+        agent.jobTitleId.toLowerCase().includes(q) ||
+        agent.divisionLabel.toLowerCase().includes(q) ||
+        agent.summary.toLowerCase().includes(q)
+      );
+    });
+  }, [activeFloorId, groupFilter, searchQuery]);
 
   const selectedSpecialist = selectedSpecialistId
     ? getSpecialistById(selectedSpecialistId) ?? null
     : null;
 
+  const selectedIdentity = selectedSpecialist
+    ? getFloorEmployeeIdentity(activeFloorId, selectedSpecialist.id)
+    : null;
+
   const selectedTasks = useMemo(() => {
     if (!selectedSpecialist) return [];
-    return (tasksByAgent[selectedSpecialist.id] ?? []).slice(0, 2);
-  }, [selectedSpecialist, tasksByAgent]);
+    const key = makeFloorAgentKey(activeFloorId, selectedSpecialist.id);
+    return (tasksByFloorAgent[key] ?? []).slice(0, 2);
+  }, [activeFloorId, selectedSpecialist, tasksByFloorAgent]);
 
   const isSelectedRunning =
     selectedSpecialist !== null &&
-    Boolean(simState.agents[selectedSpecialist.id]?.activeTaskId);
+    Boolean(floorSim.agents[selectedSpecialist.id]?.activeTaskId);
 
   const handleSubmit = (e: FormEvent) => {
     e.preventDefault();
@@ -118,23 +150,26 @@ export function AgentRosterDrawer({
       return;
     }
     setValidationError(null);
-    onSubmitSpecialistTask(selectedSpecialist, check.trimmed);
+    onSubmitSpecialistTask(activeFloorId, selectedSpecialist, check.trimmed);
     setPrompt('');
   };
 
   return (
     <section
-      aria-label="Direktori 13 Agen AI Kantor 3D"
+      aria-label="Direktori 39 Agen AI pada 3 Lantai Kantor 3D"
+      data-testid="agent-roster-drawer"
+      data-active-floor={String(activeFloorId)}
       className="pointer-events-auto mb-2 w-full rounded-xl border border-slate-700/80 bg-[#0a1322]/97 text-slate-100 shadow-2xl"
     >
       {/* Header Bar */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/90 px-3.5 py-2.5">
         <div className="min-w-0">
           <h2 className="truncate text-sm font-bold tracking-tight text-white">
-            Tim 13 Agen AI · Nama, Jabatan &amp; Pembagian Tugas
+            Tim {TOTAL_BUILDING_EMPLOYEES} Karyawan AI · 3 Lantai (13 Agen per Channel)
           </h2>
           <p className="truncate text-[11px] text-slate-400">
-            Pilih agen untuk melihat jabatan, tanggung jawab divisi, dan memberi tugas langsung
+            {floorCfg.label} · {floorCfg.channelName} · Slot API:{' '}
+            <span className="font-mono text-sky-300">{floorCfg.geminiEnvVar}</span>
           </p>
         </div>
 
@@ -168,6 +203,44 @@ export function AgentRosterDrawer({
         </div>
       </div>
 
+      {/* 3-Floor Selector Tabs */}
+      <div className="grid grid-cols-1 gap-1.5 border-b border-slate-800/80 bg-[#08101c] px-3.5 py-2 sm:grid-cols-3">
+        {FLOOR_ORDER.map((fid) => {
+          const cfg = BUILDING_FLOORS[fid];
+          const active = activeFloorId === fid;
+          return (
+            <button
+              key={fid}
+              type="button"
+              onClick={() => onSelectFloor(fid)}
+              aria-pressed={active}
+              className={`flex items-center justify-between gap-2 rounded-lg border px-2.5 py-1.5 text-left transition-colors focus-visible:outline-2 focus-visible:outline-sky-500 ${
+                active
+                  ? 'border-sky-400/75 bg-[#152640] text-white'
+                  : 'border-slate-800 bg-[#0c1728] text-slate-300 hover:border-slate-600'
+              }`}
+            >
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5">
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-xs"
+                    style={{ backgroundColor: cfg.accentHex }}
+                    aria-hidden="true"
+                  />
+                  <span className="truncate text-xs font-bold">{cfg.shortLabel}</span>
+                </div>
+                <p className="mt-0.5 truncate font-mono text-[10px] text-slate-400">
+                  {cfg.geminiEnvVar}
+                </p>
+              </div>
+              <span className="shrink-0 font-mono text-[11px] font-semibold text-slate-300 tabular-nums">
+                13 agen
+              </span>
+            </button>
+          );
+        })}
+      </div>
+
       {/* Division Group Filter Tabs */}
       <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-800/70 bg-[#08101c] px-3.5 py-2">
         <div
@@ -196,44 +269,42 @@ export function AgentRosterDrawer({
         </div>
 
         <span className="font-mono text-[11px] text-slate-400 tabular-nums">
-          Menampilkan {filteredAgents.length} / {SPECIALIST_AGENTS.length} agen
+          Lantai {activeFloorId}: {filteredAgents.length}/13 · Total Gedung: {TOTAL_BUILDING_EMPLOYEES}
         </span>
       </div>
 
       {/* Scrollable Body: 2-Column Roster Grid + Selected Specialist Inspector */}
-      <div className="max-h-[370px] overflow-y-auto p-3.5">
-        {/* Selected Specialist Detail & Task Assignment Panel */}
-        {selectedSpecialist && (
+      <div className="max-h-[340px] overflow-y-auto p-3.5">
+        {selectedSpecialist && selectedIdentity && (
           <div className="mb-3 rounded-xl border border-sky-500/35 bg-[#0f1d33] p-3">
             <div className="flex flex-wrap items-start justify-between gap-2">
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
                   <span
                     className="h-2.5 w-2.5 shrink-0 rounded-xs"
-                    style={{ backgroundColor: selectedSpecialist.accentHex }}
+                    style={{ backgroundColor: floorCfg.accentHex }}
                     aria-hidden="true"
                   />
-                  <h3 className="text-sm font-bold text-white">
-                    {selectedSpecialist.personName}
-                  </h3>
+                  <h3 className="text-sm font-bold text-white">{selectedIdentity.name}</h3>
                   <span className="text-xs font-semibold text-sky-300">
                     {selectedSpecialist.roleTitle}
                   </span>
                   <span className="text-xs text-slate-400">
-                    · {selectedSpecialist.jobTitleId}
+                    · {floorCfg.shortLabel}
                   </span>
                 </div>
-                <p className="mt-1 text-[11px] text-slate-300">
+                <p className="mt-1 flex flex-wrap items-center gap-x-1.5 text-[11px] text-slate-300">
                   <span>Divisi: {selectedSpecialist.divisionLabel}</span>
-                  <span className="mx-1.5 text-slate-500" aria-hidden="true">
-                    ·
-                  </span>
+                  <span className="text-slate-500" aria-hidden="true">·</span>
                   <span>Ruang 3D: {ZONE_LABELS[selectedSpecialist.officeZone]}</span>
-                  <span className="mx-1.5 text-slate-500" aria-hidden="true">
-                    ·
-                  </span>
+                  <span className="text-slate-500" aria-hidden="true">·</span>
                   <span>
-                    Status 3D: {simState.agents[selectedSpecialist.id]?.statusLabel ?? 'Siap'}
+                    Status 3D: {floorSim.agents[selectedSpecialist.id]?.statusLabel ?? 'Siap'}
+                  </span>
+                  <span className="text-slate-500" aria-hidden="true">·</span>
+                  <span className="inline-flex items-center gap-1 font-mono text-[10px] text-sky-300">
+                    <KeyRound className="h-3 w-3" aria-hidden="true" />
+                    {floorCfg.geminiEnvVar}
                   </span>
                 </p>
               </div>
@@ -251,7 +322,7 @@ export function AgentRosterDrawer({
                 )}
                 <button
                   type="button"
-                  onClick={() => onSelectSpecialist(null)}
+                  onClick={() => onSelectSpecialist(activeFloorId, null)}
                   aria-label="Tutup detail agen terpilih"
                   className="rounded-lg px-2 py-1 text-[11px] text-slate-400 hover:bg-slate-800 hover:text-white"
                 >
@@ -260,7 +331,6 @@ export function AgentRosterDrawer({
               </div>
             </div>
 
-            {/* Responsibilities List */}
             <ul className="mt-2 grid grid-cols-1 gap-1 text-[11px] leading-relaxed text-slate-300 sm:grid-cols-3 sm:gap-2.5">
               {selectedSpecialist.responsibilities.map((item, idx) => (
                 <li key={idx} className="border-t border-slate-700/60 pt-1.5">
@@ -270,13 +340,13 @@ export function AgentRosterDrawer({
               ))}
             </ul>
 
-            {/* Direct Task Assignment Form */}
             <form onSubmit={handleSubmit} className="mt-2.5" noValidate>
               <label
                 htmlFor={taskInputId}
                 className="block text-[11px] font-medium text-slate-300"
               >
-                Beri tugas langsung ke {selectedSpecialist.personName} ({selectedSpecialist.roleTitle})
+                Beri tugas langsung ke {selectedIdentity.name} ({floorCfg.label} ·{' '}
+                {floorCfg.channelName})
               </label>
               <div className="mt-1 flex flex-col gap-2 sm:flex-row">
                 <input
@@ -331,7 +401,6 @@ export function AgentRosterDrawer({
               )}
             </form>
 
-            {/* Latest Task Responses for Selected Specialist */}
             {selectedTasks.length > 0 && (
               <div className="mt-2.5 space-y-1.5 border-t border-slate-700/70 pt-2">
                 {selectedTasks.map((entry) => (
@@ -369,24 +438,25 @@ export function AgentRosterDrawer({
           </div>
         )}
 
-        {/* 2-Column Agent Roster Grid matching reference layout */}
         {filteredAgents.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-700/80 p-6 text-center text-xs text-slate-400">
-            Tidak ada agen AI yang cocok dengan pencarian &ldquo;{searchQuery}&rdquo;.
+            Tidak ada karyawan AI di Lantai {activeFloorId} yang cocok dengan pencarian &ldquo;
+            {searchQuery}&rdquo;.
           </div>
         ) : (
           <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2">
             {filteredAgents.map((agent) => {
               const Icon = SPECIALIST_ICONS[agent.id];
               const isSelected = selectedSpecialistId === agent.id;
-              const status = getSpecialistLiveStatus(agent, simState);
+              const status = getSpecialistLiveStatus(agent, floorSim);
+              const floorPerson = getFloorEmployeeIdentity(activeFloorId, agent.id);
 
               return (
                 <button
-                  key={agent.id}
+                  key={`${activeFloorId}-${agent.id}`}
                   type="button"
                   onClick={() => {
-                    onSelectSpecialist(isSelected ? null : agent);
+                    onSelectSpecialist(activeFloorId, isSelected ? null : agent);
                     setValidationError(null);
                   }}
                   aria-pressed={isSelected}
@@ -397,20 +467,18 @@ export function AgentRosterDrawer({
                   }`}
                 >
                   <div className="flex min-w-0 items-center gap-3">
-                    {/* Square dark-navy icon badge matching reference */}
                     <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg border border-slate-700/70 bg-[#15243b]">
                       <Icon
                         className="h-5 w-5"
-                        style={{ color: agent.accentHex }}
+                        style={{ color: floorCfg.accentHex }}
                         aria-hidden="true"
                       />
                     </div>
 
-                    {/* Personal Name + Role + Exact Task Summary + Division Metadata */}
                     <div className="min-w-0">
                       <div className="flex flex-wrap items-baseline gap-x-1.5">
                         <span className="truncate text-[13px] font-bold text-white">
-                          {agent.personName}
+                          {floorPerson.name}
                         </span>
                         <span className="text-[11px] text-slate-500" aria-hidden="true">
                           ·
@@ -423,12 +491,11 @@ export function AgentRosterDrawer({
                         {agent.summary}
                       </p>
                       <p className="mt-0.5 truncate text-[10.5px] text-slate-400">
-                        {agent.jobTitleId} · {agent.divisionLabel}
+                        L{activeFloorId} · {agent.jobTitleId} · {agent.divisionLabel}
                       </p>
                     </div>
                   </div>
 
-                  {/* Right Status Label ("Siap" amber matching reference, or "Bekerja"/"Aktif" emerald) */}
                   <span
                     className={`shrink-0 text-xs font-semibold whitespace-nowrap ${
                       status.code === 'working' ? 'text-emerald-400' : 'text-amber-400'

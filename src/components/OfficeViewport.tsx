@@ -1,34 +1,38 @@
 import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from 'react';
 import { OfficeSceneManager } from '../office/OfficeSceneManager';
 import type {
-  AgentId,
-  LightingPreset,
-  OfficeCommand,
-  OfficeSimulationState,
-  OfficeZoneId,
-} from '../office/types';
-
+  BuildingSimulationState,
+  FloorId,
+  FloorViewMode,
+} from '../office/buildingFloors';
+import type { AgentId, LightingPreset, OfficeCommand, OfficeZoneId } from '../office/types';
 import type { VideoAspectRatio } from '../office/mediaStudio';
 
 export interface OfficeViewportHandle {
-  setCameraPreset: (zone: OfficeZoneId) => void;
+  setFloorView: (view: FloorViewMode, focusZone?: OfficeZoneId) => void;
+  setCameraPreset: (zone: OfficeZoneId, overrideFloor?: FloorViewMode) => void;
   setLightingPreset: (preset: LightingPreset) => void;
   setSimulationSpeed: (speed: number) => void;
-  selectAgent: (agentId: AgentId | null, focusCamera?: boolean) => void;
-  runOfficeCommand: (command: OfficeCommand) => void;
-  startAgentTask: (agentId: AgentId, taskId: string, prompt: string) => void;
-  finishAgentTask: (agentId: AgentId, taskId: string, ok: boolean) => void;
+  selectAgent: (floorId: FloorId | null, agentId: AgentId | null, focusCamera?: boolean) => void;
+  runOfficeCommand: (command: OfficeCommand, scope?: FloorViewMode) => void;
+  startAgentTask: (floorId: FloorId, agentId: AgentId, taskId: string, prompt: string) => void;
+  finishAgentTask: (floorId: FloorId, agentId: AgentId, taskId: string, ok: boolean) => void;
   projectVideoToOffice: (
     videoDataUrl: string | null,
     aspectRatio?: VideoAspectRatio,
-    focusCamera?: boolean
+    focusCamera?: boolean,
+    floorId?: FloorId
   ) => void;
-  displayImageInOffice: (imageDataUrl: string | null, focusCamera?: boolean) => void;
+  displayImageInOffice: (
+    imageDataUrl: string | null,
+    focusCamera?: boolean,
+    floorId?: FloorId
+  ) => void;
 }
 
 interface OfficeViewportProps {
-  onStateSnapshot: (state: OfficeSimulationState) => void;
-  onAgentClicked: (agentId: AgentId) => void;
+  onStateSnapshot: (state: BuildingSimulationState) => void;
+  onAgentClicked: (floorId: FloorId, agentId: AgentId) => void;
 }
 
 export const OfficeViewport = forwardRef<OfficeViewportHandle, OfficeViewportProps>(
@@ -41,20 +45,23 @@ export const OfficeViewport = forwardRef<OfficeViewportHandle, OfficeViewportPro
     callbacksRef.current = { onStateSnapshot, onAgentClicked };
 
     useImperativeHandle(ref, () => ({
-      setCameraPreset: (zone) => managerRef.current?.setCameraPreset(zone),
+      setFloorView: (view, focusZone) => managerRef.current?.setFloorView(view, focusZone),
+      setCameraPreset: (zone, overrideFloor) =>
+        managerRef.current?.setCameraPreset(zone, overrideFloor),
       setLightingPreset: (preset) => managerRef.current?.setLightingPreset(preset),
       setSimulationSpeed: (speed) => managerRef.current?.setSimulationSpeed(speed),
-      selectAgent: (agentId, focusCamera = true) =>
-        managerRef.current?.selectAgent(agentId, focusCamera),
-      runOfficeCommand: (command) => managerRef.current?.runOfficeCommand(command),
-      startAgentTask: (agentId, taskId, prompt) =>
-        managerRef.current?.startAgentTask(agentId, taskId, prompt),
-      finishAgentTask: (agentId, taskId, ok) =>
-        managerRef.current?.finishAgentTask(agentId, taskId, ok),
-      projectVideoToOffice: (videoDataUrl, aspectRatio = '16:9', focusCamera = true) =>
-        managerRef.current?.projectVideoToOffice(videoDataUrl, aspectRatio, focusCamera),
-      displayImageInOffice: (imageDataUrl, focusCamera = true) =>
-        managerRef.current?.displayImageInOffice(imageDataUrl, focusCamera),
+      selectAgent: (floorId, agentId, focusCamera = true) =>
+        managerRef.current?.selectAgent(floorId, agentId, focusCamera),
+      runOfficeCommand: (command, scope = 'all') =>
+        managerRef.current?.runOfficeCommand(command, scope),
+      startAgentTask: (floorId, agentId, taskId, prompt) =>
+        managerRef.current?.startAgentTask(floorId, agentId, taskId, prompt),
+      finishAgentTask: (floorId, agentId, taskId, ok) =>
+        managerRef.current?.finishAgentTask(floorId, agentId, taskId, ok),
+      projectVideoToOffice: (videoDataUrl, aspectRatio = '16:9', focusCamera = true, floorId = 1) =>
+        managerRef.current?.projectVideoToOffice(videoDataUrl, aspectRatio, focusCamera, floorId),
+      displayImageInOffice: (imageDataUrl, focusCamera = true, floorId = 1) =>
+        managerRef.current?.displayImageInOffice(imageDataUrl, focusCamera, floorId),
     }));
 
     useEffect(() => {
@@ -64,7 +71,7 @@ export const OfficeViewport = forwardRef<OfficeViewportHandle, OfficeViewportPro
       try {
         const manager = new OfficeSceneManager(el, {
           onStateSnapshot: (s) => callbacksRef.current.onStateSnapshot(s),
-          onAgentClicked: (id) => callbacksRef.current.onAgentClicked(id),
+          onAgentClicked: (floorId, agentId) => callbacksRef.current.onAgentClicked(floorId, agentId),
           onWebGLContextLost: () => setWebglUnavailable(true),
         });
         managerRef.current = manager;
@@ -102,7 +109,7 @@ export const OfficeViewport = forwardRef<OfficeViewportHandle, OfficeViewportPro
         ref={mountRef}
         data-testid="office-3d-viewport"
         className="fixed inset-0 h-full w-full overflow-hidden select-none"
-        aria-label="Kanvas 3D Kantor AI interaktif. Seret untuk memutar kamera, gulir untuk memperbesar, atau klik agen AI."
+        aria-label="Kanvas 3D Kantor AI 3 lantai interaktif dengan 39 karyawan AI. Seret untuk memutar kamera, gulir untuk memperbesar, atau klik agen AI."
       />
     );
   }

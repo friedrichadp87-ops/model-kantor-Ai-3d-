@@ -3,7 +3,7 @@ export type ShortsChannelId =
   | 'daily-faith-inspiration'
   | 'bible-facts-mysteries';
 
-export type ShortsDuration = 30 | 45 | 60;
+export type ShortsDuration = 30 | 45 | 60 | 170;
 
 export type GuardianVerdict = 'LULUS' | 'PERLU REVISI' | 'DITOLAK';
 
@@ -36,22 +36,22 @@ export const YOUTUBE_CHANNELS: YouTubeShortsChannel[] = [
     id: 'bible-stories-3d',
     name: 'Bible Stories 3D',
     shortLabel: 'Stories 3D',
-    focus: 'Cerita Alkitab animasi 3D untuk anak dan keluarga',
+    focus: 'Cerita Alkitab 3D Kejadian–Wahyu (1 Pasal = 1 Cerita · 17×10d)',
     description:
-      'Kisah Alkitab visual 3D sinematik ramah keluarga dengan pesan iman yang jelas dan akurat.',
+      'Kisah Alkitab 3D dari Kejadian 1 hingga Wahyu 22 (1 pasal = 1 cerita utuh) berdurasi 2m 50d (17 adegan × 10 detik) dengan percakapan tokoh masuk ke narasi audio.',
     accentHex: '#2563eb',
     madeForKids: true,
-    defaultDuration: 45,
+    defaultDuration: 170,
     sampleTopics: [
       {
-        title: 'Daud dan Goliat: Iman Lebih Besar dari Raksasa',
-        bibleReference: '1 Samuel 17:45-50',
-        notes: 'Visual 3D hangat ramah keluarga, fokus keberanian karena Tuhan.',
+        title: 'Ep. 01 — Kejadian 1: Penciptaan Langit & Bumi (1 Pasal = 1 Cerita)',
+        bibleReference: 'Kejadian 1:1-31',
+        notes: '1 pasal penuh, 17 adegan × 10 detik (2m 50d), dialog masuk narasi audio, bersambung ke Kejadian 2.',
       },
       {
-        title: 'Musa Membelah Laut Teberau',
-        bibleReference: 'Keluaran 14:21-29',
-        notes: 'Tekankan pertolongan Tuhan saat jalan tampak buntu.',
+        title: '1 Samuel 17 — Daud dan Goliat: Iman Lebih Besar dari Raksasa',
+        bibleReference: '1 Samuel 17:1-58',
+        notes: 'Visual 3D hangat ramah keluarga, percakapan Daud & Goliat masuk narasi audio, 17×10d.',
       },
     ],
   },
@@ -59,22 +59,22 @@ export const YOUTUBE_CHANNELS: YouTubeShortsChannel[] = [
     id: 'daily-faith-inspiration',
     name: 'Daily Faith & Inspiration',
     shortLabel: 'Daily Faith',
-    focus: 'Renungan singkat, iman, pengharapan, dan kisah inspiratif',
+    focus: 'Renungan harian 2m 50d berbasis Alkitab TB & sumber valid (LAI)',
     description:
-      'Penguatan harian penuh empati dan pengharapan untuk pemirsa di tengah beban hidup.',
+      'Renungan harian ±2 menit 50 detik penuh berkat dari sumber renungan valid & Master Alkitab Terjemahan Baru, disertai animasi latar yang selaras dengan isi renungan.',
     accentHex: '#d97706',
     madeForKids: false,
-    defaultDuration: 45,
+    defaultDuration: 170,
     sampleTopics: [
       {
         title: 'Saat Doa Terasa Lama Dijawab',
         bibleReference: 'Mazmur 27:14',
-        notes: 'Nada lembut, tidak menghakimi, ajak tetap berharap pada Tuhan.',
+        notes: 'Renungan harian 2m 50d penuh pengharapan berbasis Alkitab TB, animasi latar fajar tenang.',
       },
       {
-        title: 'Tuhan Mengenal Setiap Air Matamu',
-        bibleReference: 'Mazmur 56:9',
-        notes: 'Penguatan singkat untuk pemirsa yang sedang berduka atau lelah.',
+        title: 'Damai Sejahtera di Tengah Kekhawatiran Hari Ini',
+        bibleReference: 'Filipi 4:6-7',
+        notes: 'Renungan harian 2m 50d berlandaskan Alkitab TB dengan latar alam teduh yang menenangkan hati.',
       },
     ],
   },
@@ -82,22 +82,22 @@ export const YOUTUBE_CHANNELS: YouTubeShortsChannel[] = [
     id: 'bible-facts-mysteries',
     name: 'Bible Facts & Mysteries',
     shortLabel: 'Facts & Mysteries',
-    focus: 'Fakta, sejarah, tokoh, tempat, dan konteks Alkitab',
+    focus: 'Fakta arkeologi, kata Ibrani/Yunani & misteri Alkitab (≤2m 50d)',
     description:
-      'Penjelasan konteks historis, geografis, dan fakta menarik Alkitab secara faktual dan bertanggung jawab.',
+      'Mengungkap bukti peninggalan arkeologi, makna asli kata Ibrani & Yunani yang sering disalahartikan, dan misteri Alkitab dengan visual animasi menyerupai objek riset (maks 2m 50d).',
     accentHex: '#0d9488',
     madeForKids: false,
-    defaultDuration: 60,
+    defaultDuration: 170,
     sampleTopics: [
       {
-        title: 'Mengapa Tembok Yerikho Begitu Penting dalam Sejarah Alkitab?',
-        bibleReference: 'Yosua 6:1-20',
-        notes: 'Fokus konteks kota kuno Yerikho dan ketaatan bangsa Israel.',
+        title: 'Prasasti Tel Dan: Bukti Peninggalan Eksistensi Raja Daud',
+        bibleReference: '2 Samuel 7:12-16',
+        notes: 'Fakta arkeologi faktual, visual animasi menyerupai prasasti batu kuno, maks 2m 50d.',
       },
       {
-        title: 'Apa Sebenarnya Manna yang Turun di Padang Gurun?',
-        bibleReference: 'Keluaran 16:14-31',
-        notes: 'Jelaskan teks Alkitab apa adanya tanpa spekulasi berlebihan.',
+        title: 'Kata Ibrani "Hesed" & Yunani "Tetelestai" yang Sering Disalahartikan',
+        bibleReference: 'Mazmur 136:1 & Yohanes 19:30',
+        notes: 'Kupas makna asli bahasa Alkitab dengan animasi gulungan manuskrip kuno.',
       },
     ],
   },
@@ -364,31 +364,31 @@ export const DEFAULT_CHANNEL_TEMPLATES: ChannelTemplatesMap = {
   'bible-stories-3d': {
     channelId: 'bible-stories-3d',
     scriptTemplate:
-      'Hook rasa ingin tahu untuk anak & keluarga -> Cerita kronologis Alkitab dengan dialog hangat -> Satu pesan iman sederhana yang mudah diingat.',
+      '1 Pasal = 1 Cerita utuh (Kejadian–Wahyu) -> Alur kronologis pasal lengkap dengan seluruh percakapan tokoh masuk ke narasi audio -> 17 adegan × 10 detik (2m 50d) -> Jembatan halus bersambung ke pasal berikutnya.',
     visualStyle:
-      'Stylized 3D animated cinema (warm Pixar-inspired lighting), expressive friendly biblical characters, vibrant natural landscapes, vertical 9:16, no text or watermarks.',
-    defaultDuration: 45,
-    closingCta: 'Mari belajar berani dan percaya kepada Tuhan bersama keluarga hari ini.',
+      'Stylized 3D animated cinema (warm Pixar-inspired lighting), expressive friendly biblical characters consistent across all 17 ten-second scenes, vibrant natural landscapes, vertical 9:16, no text or watermarks.',
+    defaultDuration: 170,
+    closingCta: 'Ikuti lanjutan kisah pasal berikutnya dari seri Alkitab 3D bersama keluarga!',
     updatedAt: 'default',
   },
   'daily-faith-inspiration': {
     channelId: 'daily-faith-inspiration',
     scriptTemplate:
-      'Hook empati yang menyapa hati lelah -> Penguatan iman penuh pengharapan tanpa menghakimi -> Doa singkat yang menenangkan jiwa.',
+      'Sapaan hangat & ayat Alkitab Terjemahan Baru (0:00-0:30) -> Renungan mendalam dari sumber valid LAI yang menguatkan hati (0:30-1:50) -> Aplikasi iman praktis hari ini (1:50-2:25) -> Doa berkat penutup yang menenangkan (2:25-2:50).',
     visualStyle:
-      'Cinematic golden-hour atmosphere, peaceful sunrise over misty hills, soft shallow depth of field, warm amber rim lighting, vertical 9:16, no text or watermarks.',
-    defaultDuration: 45,
-    closingCta: 'Simpan renungan ini sebagai pengingat bahwa Tuhan selalu menyertaimu.',
+      'Peaceful atmospheric background animation matching the devotional message (golden sunrise over misty hills, gentle flowing river, warm sunlight through olive trees, tranquil evening sky), smooth contemplative motion, no embedded text or watermarks.',
+    defaultDuration: 170,
+    closingCta: 'Kiranya firman Tuhan hari ini menguatkan dan memberkati langkah hidupmu. Amin.',
     updatedAt: 'default',
   },
   'bible-facts-mysteries': {
     channelId: 'bible-facts-mysteries',
     scriptTemplate:
-      'Hook fakta sejarah mengejutkan -> 2-3 poin konteks historis & geografis akurat sesuai teks Alkitab -> Refleksi singkat tanpa spekulasi berlebihan.',
+      'Hook misteri / fakta Alkitab jarang diketahui -> Bukti peninggalan arkeologi &/atau kupas makna asli kata Ibrani/Yunani yang sering salah diartikan -> 17 adegan × 10 detik (maks 2m 50d) berbasis Master Alkitab TB -> Kesimpulan faktual tanpa spekulasi liar.',
     visualStyle:
-      'Documentary-grade ancient Middle East architectural visualization, textured stone ruins, warm torchlight and historical map details, smooth dolly shots, vertical 9:16, no text or watermarks.',
-    defaultDuration: 60,
-    closingCta: 'Fakta sejarah Alkitab apa lagi yang ingin kita telusuri berikutnya?',
+      'Documentary-grade historical reconstruction closely resembling real archaeological artifacts, ancient stone inscriptions, Hebrew & Greek parchment scrolls, Middle East ruins, warm cinematic lighting, vertical 9:16, no text or watermarks.',
+    defaultDuration: 170,
+    closingCta: 'Fakta arkeologi atau kata asli Alkitab apa lagi yang ingin kita telusuri berikutnya?',
     updatedAt: 'default',
   },
 };
@@ -417,8 +417,8 @@ export function validateChannelTemplate(
     return { ok: false, error: 'Style visual harus 10–600 karakter.' };
   }
   const dur = Number(input.defaultDuration);
-  if (dur !== 30 && dur !== 45 && dur !== 60) {
-    return { ok: false, error: 'Durasi default harus 30, 45, atau 60 detik.' };
+  if (dur !== 30 && dur !== 45 && dur !== 60 && dur !== 170) {
+    return { ok: false, error: 'Durasi default harus 30, 45, 60, atau 170 detik (2m 50d).' };
   }
   const closingCta = String(input.closingCta ?? '').trim().slice(0, 200);
 
@@ -475,6 +475,10 @@ export function computeScriptWordBudget(durationSeconds: ShortsDuration): {
   minWords: number;
   maxWords: number;
 } {
+  if (durationSeconds === 170) {
+    // 2 minutes 50 seconds calm devotional narration (~120-148 words/min)
+    return { minWords: 340, maxWords: 420 };
+  }
   const minWords = Math.max(35, Math.floor(durationSeconds * 1.45));
   const maxWords = Math.floor(durationSeconds * 2.0) + 4;
   return { minWords, maxWords };
@@ -833,8 +837,13 @@ export function validateShortsBrief(input: {
   if (title.length < 3 || title.length > 120) {
     return { ok: false, error: 'Topik video harus 3–120 karakter.' };
   }
-  if (input.durationSeconds !== 30 && input.durationSeconds !== 45 && input.durationSeconds !== 60) {
-    return { ok: false, error: 'Durasi Shorts harus 30, 45, atau 60 detik.' };
+  if (
+    input.durationSeconds !== 30 &&
+    input.durationSeconds !== 45 &&
+    input.durationSeconds !== 60 &&
+    input.durationSeconds !== 170
+  ) {
+    return { ok: false, error: 'Durasi harus 30, 45, 60, atau 170 detik (2m 50d).' };
   }
   return { ok: true };
 }
@@ -852,10 +861,10 @@ export function createInitialShortsQueue(): ShortsQueueItem[] {
     {
       id: 'seed-bs3d-1',
       channelId: 'bible-stories-3d',
-      title: 'Daud dan Goliat: Iman Lebih Besar dari Raksasa',
-      bibleReference: '1 Samuel 17:45-50',
-      durationSeconds: 45,
-      notes: 'Animasi 3D hangat ramah anak dan keluarga.',
+      title: 'Ep. 01 — Kejadian 1: Penciptaan Dunia (1 Pasal = 1 Cerita)',
+      bibleReference: 'Kejadian 1',
+      durationSeconds: 170,
+      notes: '17 adegan × 10 detik (2m 50d), percakapan masuk narasi audio, bersambung ke Kejadian 2.',
       stage: 'Ide',
       guardianStatus: 'BELUM DICEK',
       updatedAt: now,
@@ -863,10 +872,10 @@ export function createInitialShortsQueue(): ShortsQueueItem[] {
     {
       id: 'seed-dfi-1',
       channelId: 'daily-faith-inspiration',
-      title: 'Saat Doa Terasa Lama Dijawab',
+      title: 'Saat Doa Terasa Lama Dijawab (Renungan 2m 50d)',
       bibleReference: 'Mazmur 27:14',
-      durationSeconds: 45,
-      notes: 'Nada lembut dan penuh pengharapan tanpa menghakimi.',
+      durationSeconds: 170,
+      notes: 'Renungan harian 2m 50d berbasis Master Alkitab TB & sumber valid LAI dengan animasi latar selaras isi.',
       stage: 'Ide',
       guardianStatus: 'BELUM DICEK',
       updatedAt: now,
@@ -874,10 +883,10 @@ export function createInitialShortsQueue(): ShortsQueueItem[] {
     {
       id: 'seed-bfm-1',
       channelId: 'bible-facts-mysteries',
-      title: 'Fakta Sejarah Tembok Yerikho dalam Alkitab',
-      bibleReference: 'Yosua 6:1-20',
-      durationSeconds: 60,
-      notes: 'Sajikan konteks historis dan teks Alkitab secara faktual.',
+      title: 'Prasasti Tel Dan & Makna Kata Ibrani "Hesed" (Maks 2m 50d)',
+      bibleReference: '2 Samuel 7 & Mazmur 136',
+      durationSeconds: 170,
+      notes: 'Bukti arkeologi & bahasa asli Ibrani/Yunani dengan animasi menyerupai objek riset (17×10d).',
       stage: 'Ide',
       guardianStatus: 'BELUM DICEK',
       updatedAt: now,

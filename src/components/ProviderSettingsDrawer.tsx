@@ -2,9 +2,12 @@ import { useEffect, useId, useState, type FormEvent } from 'react';
 import {
   AlertCircle,
   CheckCircle2,
+  Cloud,
   Cpu,
+  Database,
   Download,
   Loader2,
+  LogIn,
   RefreshCw,
   RotateCcw,
   Save,
@@ -15,6 +18,8 @@ import {
   Volume2,
   X,
 } from 'lucide-react';
+import { firebaseConfig, type FirestoreSyncStatus } from '../firebase/client';
+import type { FirebaseAuthUserSummary } from '../firebase/officeSync';
 import {
   ELEVENLABS_MODELS,
   ELEVENLABS_VOICE_PRESETS,
@@ -32,14 +37,17 @@ import {
 } from '../office/providerConfig';
 import type { LightingPreset } from '../office/types';
 
-type ProviderTab = 'ollama' | 'gemini' | 'elevenlabs';
+type ProviderTab = 'ollama' | 'gemini' | 'elevenlabs' | 'firebase';
 
 interface ProviderSettingsDrawerProps {
   lighting: LightingPreset;
   config: ProviderConfig;
+  firebaseUser: FirebaseAuthUserSummary | null;
+  firebaseSyncStatus: FirestoreSyncStatus;
   onSaveConfig: (next: ProviderConfig) => void;
   onResetConfig: () => void;
   onOpenChannelTemplates: () => void;
+  onOpenFirebaseAuth: () => void;
   onVoiceSynthesisEvent?: (phase: 'start' | 'done' | 'error', label: string) => void;
   onClose: () => void;
 }
@@ -60,9 +68,12 @@ interface ElevenLabsVoiceItem {
 export function ProviderSettingsDrawer({
   lighting,
   config,
+  firebaseUser,
+  firebaseSyncStatus,
   onSaveConfig,
   onResetConfig,
   onOpenChannelTemplates,
+  onOpenFirebaseAuth,
   onVoiceSynthesisEvent,
   onClose,
 }: ProviderSettingsDrawerProps) {
@@ -141,7 +152,7 @@ export function ProviderSettingsDrawer({
     }
     setDraft(check.value);
     onSaveConfig(check.value);
-    setSaveNotice('Konfigurasi koneksi AI disimpan dan aktif untuk semua 13 agen.');
+    setSaveNotice('Konfigurasi koneksi AI disimpan dan aktif untuk semua 39 agen (3 lantai).');
   };
 
   const handleTestOllama = async () => {
@@ -378,7 +389,7 @@ export function ProviderSettingsDrawer({
             Koneksi Provider AI · Ollama Localhost, Gemini API &amp; ElevenLabs
           </h2>
           <p className={`truncate text-[11px] ${mutedText}`}>
-            Hubungkan 13 agen AI ke model lokal Ollama, pantau Gemini API, dan atur narasi suara ElevenLabs
+            Hubungkan 39 agen AI pada 3 lantai ke model lokal Ollama, 3 slot kunci Gemini API, dan narasi ElevenLabs
           </p>
         </div>
 
@@ -424,6 +435,7 @@ export function ProviderSettingsDrawer({
               { id: 'ollama', label: 'Ollama (Localhost)', Icon: Cpu },
               { id: 'gemini', label: 'Gemini API', Icon: Sparkles },
               { id: 'elevenlabs', label: 'ElevenLabs (Suara)', Icon: Volume2 },
+              { id: 'firebase', label: 'Firebase Console', Icon: Cloud },
             ] as const
           ).map(({ id, label, Icon }) => {
             const active = activeTab === id;
@@ -838,6 +850,80 @@ export function ProviderSettingsDrawer({
               </div>
             </div>
 
+            {/* 3-Floor Dedicated API Key Routing Matrix (Read-Only Server Status) */}
+            <div className={`rounded-lg border p-3 ${panelBg}`}>
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-xs font-bold">Perutean 3 Kunci API per Lantai &amp; Channel YouTube</h3>
+                <span className={`font-mono text-[10px] ${mutedText}`}>
+                  Settings &gt; Secrets
+                </span>
+              </div>
+              <p className={`mt-1 text-[11px] leading-relaxed ${mutedText}`}>
+                Setiap lantai (13 agen AI) otomatis memakai 1 kunci API Gemini &amp; ElevenLabs khusus
+                channel lantai tersebut untuk seluruh perintah di lantai itu. Jika slot khusus lantai
+                kosong, server otomatis memakai kunci global.
+              </p>
+              <div className={`mt-2 divide-y rounded-md border text-[11px] ${subtleBorder}`}>
+                {(serverStatus?.channelRouting ?? []).map((slot) => (
+                  <div
+                    key={slot.channelId}
+                    className="flex flex-wrap items-center justify-between gap-2 px-2.5 py-2"
+                  >
+                    <div className="min-w-0">
+                      <p className="font-semibold">
+                        {slot.floorLabel ? `${slot.floorLabel} · ` : ''}
+                        {slot.channelLabel}
+                      </p>
+                      <p className={`truncate font-mono text-[10px] ${mutedText}`}>
+                        {slot.geminiEnvVar} · {slot.elevenLabsEnvVar}
+                      </p>
+                    </div>
+                    <div className="flex items-center gap-2 text-[11px] font-medium">
+                      <span
+                        className={
+                          slot.geminiSource === 'dedicated'
+                            ? 'text-emerald-500'
+                            : slot.geminiSource === 'fallback_global'
+                            ? isDark
+                              ? 'text-sky-400'
+                              : 'text-sky-700'
+                            : 'text-amber-500'
+                        }
+                      >
+                        Gemini:{' '}
+                        {slot.geminiSource === 'dedicated'
+                          ? 'Kunci Khusus'
+                          : slot.geminiSource === 'fallback_global'
+                          ? 'Fallback Global'
+                          : 'Belum Aktif'}
+                      </span>
+                      <span aria-hidden="true" className={mutedText}>
+                        ·
+                      </span>
+                      <span
+                        className={
+                          slot.elevenLabsSource === 'dedicated'
+                            ? 'text-emerald-500'
+                            : slot.elevenLabsSource === 'fallback_global'
+                            ? isDark
+                              ? 'text-sky-400'
+                              : 'text-sky-700'
+                            : mutedText
+                        }
+                      >
+                        Audio:{' '}
+                        {slot.elevenLabsSource === 'dedicated'
+                          ? 'Kunci Khusus'
+                          : slot.elevenLabsSource === 'fallback_global'
+                          ? 'Fallback Global'
+                          : 'Opsional'}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+
             {/* Active Gemini Model Choice */}
             <div>
               <p className="text-xs font-semibold">Model Teks Gemini untuk 13 Agen AI</p>
@@ -1172,6 +1258,74 @@ export function ProviderSettingsDrawer({
                   )}
                 </button>
               </form>
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'firebase' && (
+          <div className="space-y-3">
+            <div className={`rounded-lg border p-3 ${panelBg}`}>
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="flex items-start gap-2.5">
+                  <Cloud className="mt-0.5 h-4 w-4 shrink-0 text-amber-500" aria-hidden="true" />
+                  <div>
+                    <h3 className="text-xs font-bold">
+                      Firebase Console · Proyek {firebaseConfig.projectId}
+                    </h3>
+                    <p className={`mt-0.5 text-[11px] leading-relaxed ${mutedText}`}>
+                      Auth Domain:{' '}
+                      <code className="font-mono">{firebaseConfig.authDomain}</code> · Status:{' '}
+                      <strong
+                        className={
+                          firebaseUser
+                            ? 'text-emerald-500'
+                            : isDark
+                            ? 'text-amber-400'
+                            : 'text-amber-700'
+                        }
+                      >
+                        {firebaseUser
+                          ? `Masuk sebagai ${firebaseUser.email || firebaseUser.displayName}`
+                          : 'Belum masuk (Mode Pratinjau aktif)'}
+                      </strong>
+                    </p>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={onOpenFirebaseAuth}
+                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
+                    isDark
+                      ? 'bg-sky-600 text-white hover:bg-sky-500'
+                      : 'bg-slate-900 text-white hover:bg-slate-800'
+                  }`}
+                >
+                  <LogIn className="h-3.5 w-3.5" aria-hidden="true" />
+                  {firebaseUser ? 'Kelola Akun & Sync' : 'Buka Login Firebase'}
+                </button>
+              </div>
+            </div>
+
+            <div className={`grid grid-cols-1 gap-3 rounded-lg border p-3 md:grid-cols-2 ${panelBg}`}>
+              <div className="space-y-1.5">
+                <div className="flex items-center gap-1.5 text-xs font-semibold">
+                  <Database className="h-3.5 w-3.5 text-sky-500" aria-hidden="true" />
+                  <span>Koleksi Firestore Kantor AI 3D</span>
+                </div>
+                <ul className={`space-y-1 font-mono text-[11px] ${mutedText}`}>
+                  <li>users/&#123;uid&#125;</li>
+                  <li>users/&#123;uid&#125;/workspace/settings</li>
+                  <li>users/&#123;uid&#125;/shortsQueue/&#123;itemId&#125;</li>
+                  <li>users/&#123;uid&#125;/agentTasks/&#123;taskId&#125;</li>
+                </ul>
+              </div>
+              <div className="space-y-1.5">
+                <p className="text-xs font-semibold">Status Koneksi &amp; Firestore Rules</p>
+                <p className={`text-[11px] leading-relaxed ${mutedText}`}>
+                  {firebaseSyncStatus.message}
+                </p>
+              </div>
             </div>
           </div>
         )}

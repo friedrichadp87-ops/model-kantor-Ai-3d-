@@ -12,6 +12,7 @@ import {
   AlertCircle,
   Loader2,
 } from 'lucide-react';
+import { BUILDING_FLOORS, type FloorId } from '../office/buildingFloors';
 import type { LightingPreset } from '../office/types';
 import {
   ALLOWED_IMAGE_ASPECTS,
@@ -37,6 +38,7 @@ export interface MediaStudioPrefill {
 }
 
 interface MediaStudioDrawerProps {
+  activeFloorId: FloorId;
   lighting: LightingPreset;
   items: GeneratedMediaItem[];
   projectedVideoId: string | null;
@@ -81,6 +83,7 @@ const IMAGE_PRESETS: Array<{ label: string; mode: ImageStudioMode; prompt: strin
 ];
 
 export function MediaStudioDrawer({
+  activeFloorId,
   lighting,
   items,
   projectedVideoId,
@@ -91,6 +94,7 @@ export function MediaStudioDrawer({
   onProjectVideo,
   onMountGalleryImage,
 }: MediaStudioDrawerProps) {
+  const floorCfg = BUILDING_FLOORS[activeFloorId];
   const isDark = lighting === 'malam';
   const [activeTab, setActiveTab] = useState<StudioTab>('video');
 
@@ -173,7 +177,11 @@ export function MediaStudioDrawer({
       const response = await fetch('/api/studio/video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(check.value),
+        body: JSON.stringify({
+          ...check.value,
+          floorId: activeFloorId,
+          channelId: floorCfg.channelId,
+        }),
       });
       const data = (await response.json()) as {
         dataUrl?: string;
@@ -257,6 +265,8 @@ export function MediaStudioDrawer({
           aspectRatio: check.value.aspectRatio,
           imageSize: check.value.imageSize,
           sourceImageDataUrl: check.value.mode === 'edit' ? sourceImageDataUrl : undefined,
+          floorId: activeFloorId,
+          channelId: floorCfg.channelId,
         }),
       });
       const data = (await response.json()) as {
@@ -314,9 +324,12 @@ export function MediaStudioDrawer({
       >
         <div className="flex flex-wrap items-center gap-2.5">
           <div>
-            <h2 className="text-sm font-bold tracking-tight">Studio Media AI</h2>
+            <h2 className="text-sm font-bold tracking-tight">
+              Studio Media AI · {floorCfg.shortLabel}
+            </h2>
             <p className={`text-[11px] ${mutedText}`}>
-              Proyeksikan video ke Layar Rapat &amp; pasang karya gambar di Galeri 3D
+              Proyeksikan ke Layar Lantai {activeFloorId} · Kunci API:{' '}
+              <span className="font-mono">{floorCfg.geminiEnvVar}</span>
             </p>
           </div>
 

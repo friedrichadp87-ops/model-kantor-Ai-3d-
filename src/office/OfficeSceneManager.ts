@@ -1,25 +1,26 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { AGENT_ORDER, AGENT_PROFILES, CAMERA_PRESETS } from './layout';
-import { buildOfficeScene, type OfficeSceneParts } from './models';
 import {
-  assignAgentTask,
-  completeAgentTask,
-  createInitialSimulationState,
-  dispatchOfficeCommand,
-  failAgentTask,
-  stepOfficeSimulation,
-} from './simulation';
+  BUILDING_FLOORS,
+  FLOOR_HEIGHT,
+  FLOOR_ORDER,
+  assignFloorAgentTask,
+  completeFloorAgentTask,
+  createInitialBuildingState,
+  dispatchBuildingCommand,
+  failFloorAgentTask,
+  getFloorCameraPreset,
+  stepBuildingSimulation,
+  type BuildingSimulationState,
+  type FloorId,
+  type FloorViewMode,
+} from './buildingFloors';
+import { AGENT_ORDER } from './layout';
+import { buildOfficeScene, type OfficeSceneParts } from './models';
 import { createOfficeTexturePack, type OfficeTexturePack } from './textures';
 import { aspectStringToRatio, computeScreenFitScale, type VideoAspectRatio } from './mediaStudio';
-import type {
-  AgentId,
-  LightingPreset,
-  OfficeCommand,
-  OfficeSimulationState,
-  OfficeZoneId,
-} from './types';
+import type { AgentId, LightingPreset, OfficeCommand, OfficeZoneId } from './types';
 
 // Reusable scratch math objects (zero per-frame GC)
 const _camGoalPos = new THREE.Vector3();
@@ -49,12 +50,12 @@ const LIGHTING_CONFIGS: Record<LightingPreset, LightingConfig> = {
     bgHex: 0xdce5ec,
     keyHex: 0xfff5e4,
     keyIntensity: 2.25,
-    keyPos: [15, 22, 12],
+    keyPos: [18, 28, 16],
     hemiSky: 0xcbe3fa,
     hemiGround: 0x8b7e74,
-    hemiIntensity: 1.0,
+    hemiIntensity: 1.02,
     envIntensity: 0.95,
-    interiorPointIntensity: 0.4,
+    interiorPointIntensity: 0.45,
     lampEmissive: 0.55,
     exposure: 1.06,
   },
@@ -62,33 +63,33 @@ const LIGHTING_CONFIGS: Record<LightingPreset, LightingConfig> = {
     bgHex: 0xd8c3b0,
     keyHex: 0xffae66,
     keyIntensity: 2.1,
-    keyPos: [-16, 12, 14],
+    keyPos: [-18, 18, 16],
     hemiSky: 0x99add0,
     hemiGround: 0x6b5140,
-    hemiIntensity: 0.78,
+    hemiIntensity: 0.8,
     envIntensity: 0.72,
-    interiorPointIntensity: 1.55,
+    interiorPointIntensity: 1.6,
     lampEmissive: 1.25,
     exposure: 1.05,
   },
   malam: {
     bgHex: 0x0b1220,
     keyHex: 0x6e98d6,
-    keyIntensity: 0.42,
-    keyPos: [10, 18, -14],
+    keyIntensity: 0.44,
+    keyPos: [14, 24, -14],
     hemiSky: 0x1e3354,
     hemiGround: 0x0f172a,
-    hemiIntensity: 0.34,
-    envIntensity: 0.26,
-    interiorPointIntensity: 4.2,
+    hemiIntensity: 0.36,
+    envIntensity: 0.28,
+    interiorPointIntensity: 4.0,
     lampEmissive: 2.4,
     exposure: 1.08,
   },
 };
 
 export interface OfficeManagerCallbacks {
-  onStateSnapshot: (state: OfficeSimulationState) => void;
-  onAgentClicked: (agentId: AgentId) => void;
+  onStateSnapshot: (state: BuildingSimulationState) => void;
+  onAgentClicked: (floorId: FloorId, agentId: AgentId) => void;
   onWebGLContextLost?: () => void;
 }
 
@@ -119,11 +120,13 @@ export class OfficeSceneManager {
   private hemiLight: THREE.HemisphereLight;
   private interiorLights: THREE.PointLight[] = [];
 
-  private simState: OfficeSimulationState;
+  private buildingState: BuildingSimulationState;
   private simSpeed = 1;
   private lightingPreset: LightingPreset = 'pagi';
-  private selectedAgentId: AgentId | null = null;
-  private hoveredAgentId: AgentId | null = null;
+  private floorView: FloorViewMode = 'all';
+  private activeZone: OfficeZoneId = 'overview';
+  private selectedTarget: { floorId: FloorId; agentId: AgentId } | null = null;
+  private hoveredTarget: { floorId: FloorId; agentId: AgentId } | null = null;
   private followSelectedAgent = false;
 
   private cameraTransitionActive = false;
@@ -141,14 +144,16 @@ export class OfficeSceneManager {
 
   private activeVideoEl: HTMLVideoElement | null = null;
   private activeVideoTexture: THREE.VideoTexture | null = null;
+  private activeVideoFloor: FloorId | null = null;
   private activeGalleryTexture: THREE.Texture | null = null;
+  private activeGalleryFloor: FloorId | null = null;
 
   constructor(container: HTMLElement, callbacks: OfficeManagerCallbacks) {
     this.container = container;
     this.callbacks = callbacks;
     this.isSoftwareGl = detectSoftwareGl();
 
-    this.simState = createInitialSimulationState();
+    this.buildingState = createInitialBuildingState();
 
     // Renderer
     this.renderer = new THREE.WebGLRenderer({
@@ -172,11 +177,11 @@ export class OfficeSceneManager {
     this.renderer.domElement.style.height = '100%';
     container.appendChild(this.renderer.domElement);
 
-    // Scene & Fog
+    // Scene & Fog (tuned for 3-story architectural tower scale)
     this.scene = new THREE.Scene();
     const initLight = LIGHTING_CONFIGS.pagi;
     this.scene.background = new THREE.Color(initLight.bgHex);
-    this.scene.fog = new THREE.Fog(initLight.bgHex, 34, 66);
+    this.scene.fog = new THREE.Fog(initLight.bgHex, 65, 155);
 
     // Studio Environment Reflections via RoomEnvironment (every device)
     const pmremGenerator = new THREE.PMREMGenerator(this.renderer);
@@ -186,9 +191,9 @@ export class OfficeSceneManager {
     roomEnv.dispose();
     pmremGenerator.dispose();
 
-    // Camera & OrbitControls
-    const overview = CAMERA_PRESETS.overview;
-    this.camera = new THREE.PerspectiveCamera(40, width / height, 0.2, 120);
+    // Camera & OrbitControls (start framing all 3 floors cleanly)
+    const overview = getFloorCameraPreset('overview', 'all');
+    this.camera = new THREE.PerspectiveCamera(40, width / height, 0.2, 200);
     this.camera.position.set(overview.position.x, overview.position.y, overview.position.z);
 
     this.controls = new OrbitControls(this.camera, this.renderer.domElement);
@@ -196,9 +201,9 @@ export class OfficeSceneManager {
     this.controls.enableDamping = !this.isSoftwareGl;
     this.controls.dampingFactor = 0.07;
     this.controls.minDistance = 5.5;
-    this.controls.maxDistance = 36;
-    this.controls.minPolarAngle = 0.28;
-    this.controls.maxPolarAngle = Math.PI / 2.15;
+    this.controls.maxDistance = 64;
+    this.controls.minPolarAngle = 0.25;
+    this.controls.maxPolarAngle = Math.PI / 2.08;
     this.controls.update();
 
     this.controls.addEventListener('start', () => {
@@ -206,7 +211,7 @@ export class OfficeSceneManager {
       this.followSelectedAgent = false;
     });
 
-    // 3-Point Warm/Cool Lighting Rig (1 shadow caster + hemisphere + 3 unshadowed interior point lights)
+    // 3-Point Warm/Cool Lighting Rig (1 shadow caster + hemisphere + 3 unshadowed story warm lights)
     this.hemiLight = new THREE.HemisphereLight(
       initLight.hemiSky,
       initLight.hemiGround,
@@ -219,8 +224,8 @@ export class OfficeSceneManager {
     this.keyLight.castShadow = !this.isSoftwareGl;
     this.keyLight.shadow.mapSize.set(1024, 1024);
     this.keyLight.shadow.camera.near = 2;
-    this.keyLight.shadow.camera.far = 55;
-    const d = 16;
+    this.keyLight.shadow.camera.far = 75;
+    const d = 22;
     this.keyLight.shadow.camera.left = -d;
     this.keyLight.shadow.camera.right = d;
     this.keyLight.shadow.camera.top = d;
@@ -229,30 +234,26 @@ export class OfficeSceneManager {
     this.keyLight.shadow.normalBias = 0.02;
     this.scene.add(this.keyLight);
 
-    // Subtle interior warm lamps & cool server glow (unshadowed, budget <= 4)
-    const meetingLamp = new THREE.PointLight(0xffdfb0, initLight.interiorPointIntensity, 14, 1.5);
-    meetingLamp.position.set(-6.5, 2.75, 4.0);
-    const workLamp = new THREE.PointLight(0xfff1d6, initLight.interiorPointIntensity, 16, 1.5);
-    workLamp.position.set(1.2, 3.4, -3.6);
-    const loungeLamp = new THREE.PointLight(0xffdca8, initLight.interiorPointIntensity, 14, 1.5);
-    loungeLamp.position.set(6.8, 3.2, 4.5);
-    const serverGlow = new THREE.PointLight(0x60a5fa, 0.85, 8, 1.7);
-    serverGlow.position.set(2.6, 2.2, -5.5);
+    // One unshadowed warm architectural light per story (budget = 3 point lights total)
+    for (const floorId of FLOOR_ORDER) {
+      const y = BUILDING_FLOORS[floorId].elevationY + 3.1;
+      const storyLamp = new THREE.PointLight(
+        0xffebd2,
+        initLight.interiorPointIntensity,
+        22,
+        1.45
+      );
+      storyLamp.position.set(0.5, y, 0.2);
+      this.interiorLights.push(storyLamp);
+      this.scene.add(storyLamp);
+    }
 
-    this.interiorLights.push(meetingLamp, workLamp, loungeLamp, serverGlow);
-    this.scene.add(meetingLamp, workLamp, loungeLamp, serverGlow);
-
-    // Build textures & 3D architectural office
+    // Build textures & 3-story 39-employee architectural tower
     this.textures = createOfficeTexturePack(this.renderer);
-    const agentMeta = AGENT_ORDER.map((id) => ({
-      id,
-      tagLabel: AGENT_PROFILES[id].tagLabel,
-      accentHex: AGENT_PROFILES[id].accentHex,
-    }));
-    this.parts = buildOfficeScene(this.textures, this.isSoftwareGl, agentMeta);
+    this.parts = buildOfficeScene(this.textures, this.isSoftwareGl);
     this.scene.add(this.parts.root);
 
-    // Sync initial agent poses immediately
+    // Sync initial 39 agent poses immediately
     this.syncAgentVisuals(0);
 
     if (!this.isSoftwareGl) {
@@ -260,7 +261,7 @@ export class OfficeSceneManager {
     }
 
     this.bindEvents();
-    this.callbacks.onStateSnapshot(this.simState);
+    this.callbacks.onStateSnapshot(this.buildingState);
 
     this.lastFrameMs = performance.now();
     this.tick();
@@ -287,6 +288,7 @@ export class OfficeSceneManager {
     this.camera.aspect = width / height;
     this.camera.updateProjectionMatrix();
     this.renderer.setSize(width, height);
+    this.renderer.render(this.scene, this.camera);
   };
 
   private handlePointerDown = (e: PointerEvent): void => {
@@ -299,12 +301,12 @@ export class OfficeSceneManager {
       e.clientX - this.pointerDownPos.x,
       e.clientY - this.pointerDownPos.y
     );
-    if (moved > 6) return; // User orbited/panned rather than clicking
+    if (moved > 6) return;
 
-    const hitId = this.raycastAgent(e.clientX, e.clientY);
-    if (hitId) {
-      this.selectAgent(hitId, true);
-      this.callbacks.onAgentClicked(hitId);
+    const hit = this.raycastAgent(e.clientX, e.clientY);
+    if (hit) {
+      this.selectAgent(hit.floorId, hit.agentId, true);
+      this.callbacks.onAgentClicked(hit.floorId, hit.agentId);
     }
   };
 
@@ -313,29 +315,60 @@ export class OfficeSceneManager {
     if (now - this.lastHoverRaycastMs < 60) return;
     this.lastHoverRaycastMs = now;
 
-    const hitId = this.raycastAgent(e.clientX, e.clientY);
-    this.hoveredAgentId = hitId;
-    this.renderer.domElement.style.cursor = hitId ? 'pointer' : 'grab';
+    const hit = this.raycastAgent(e.clientX, e.clientY);
+    this.hoveredTarget = hit;
+    this.renderer.domElement.style.cursor = hit ? 'pointer' : 'grab';
   };
 
-  private raycastAgent(clientX: number, clientY: number): AgentId | null {
+  private getVisibleInteractables(): THREE.Object3D[] {
+    const list: THREE.Object3D[] = [];
+    for (const floorId of FLOOR_ORDER) {
+      if (this.parts.floorGroups[floorId].visible) {
+        list.push(...this.parts.interactablesByFloor[floorId]);
+      }
+    }
+    return list;
+  }
+
+  private raycastAgent(
+    clientX: number,
+    clientY: number
+  ): { floorId: FloorId; agentId: AgentId } | null {
     const rect = this.renderer.domElement.getBoundingClientRect();
     if (rect.width <= 0 || rect.height <= 0) return null;
     _mouseNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1;
     _mouseNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1;
 
     this.raycaster.setFromCamera(_mouseNdc, this.camera);
-    const hits = this.raycaster.intersectObjects(this.parts.interactables, false);
+    const hits = this.raycaster.intersectObjects(this.getVisibleInteractables(), false);
     if (hits.length > 0) {
-      const id = hits[0].object.userData.agentId as AgentId | undefined;
-      return id ?? null;
+      const floorId = hits[0].object.userData.floorId as FloorId | undefined;
+      const agentId = hits[0].object.userData.agentId as AgentId | undefined;
+      if (floorId && agentId) {
+        return { floorId, agentId };
+      }
     }
     return null;
   }
 
-  public setCameraPreset(zoneId: OfficeZoneId): void {
-    const preset = CAMERA_PRESETS[zoneId];
-    if (!preset) return;
+  private applyCutawayVisibility(view: FloorViewMode): void {
+    // Cutaway mode hides stories ABOVE the selected floor so the selected floor is 100% unobstructed
+    this.parts.floorGroups[1].visible = true;
+    this.parts.floorGroups[2].visible = view !== 1;
+    this.parts.floorGroups[3].visible = view === 'all' || view === 3;
+  }
+
+  public setFloorView(view: FloorViewMode, focusZone?: OfficeZoneId): void {
+    this.floorView = view;
+    this.applyCutawayVisibility(view);
+    const targetZone = focusZone ?? (view === 'all' ? 'overview' : this.activeZone);
+    this.setCameraPreset(targetZone, view);
+  }
+
+  public setCameraPreset(zoneId: OfficeZoneId, overrideFloor?: FloorViewMode): void {
+    this.activeZone = zoneId;
+    const view = overrideFloor ?? this.floorView;
+    const preset = getFloorCameraPreset(zoneId, view);
     this.followSelectedAgent = false;
     this.activeCameraGoalPos.set(preset.position.x, preset.position.y, preset.position.z);
     this.activeCameraGoalTarget.set(preset.target.x, preset.target.y, preset.target.z);
@@ -350,54 +383,104 @@ export class OfficeSceneManager {
     this.simSpeed = speed;
   }
 
-  public selectAgent(agentId: AgentId | null, focusCamera = true): void {
-    this.selectedAgentId = agentId;
-    if (agentId && focusCamera) {
-      const a = this.simState.agents[agentId];
+  public selectAgent(
+    floorId: FloorId | null,
+    agentId: AgentId | null,
+    focusCamera = true
+  ): void {
+    if (!floorId || !agentId) {
+      this.selectedTarget = null;
+      this.followSelectedAgent = false;
+      return;
+    }
+
+    this.selectedTarget = { floorId, agentId };
+    if (focusCamera) {
+      // Ensure cutaway exposes the target floor cleanly
+      if (this.floorView !== 'all' && this.floorView !== floorId) {
+        this.floorView = floorId;
+        this.applyCutawayVisibility(floorId);
+      } else if (this.floorView === 'all' && floorId < 3) {
+        // Reveal floor cleanly so upper slab doesn't obstruct close-up focus
+        this.floorView = floorId;
+        this.applyCutawayVisibility(floorId);
+      }
+      const a = this.buildingState.floors[floorId]?.agents[agentId];
+      const yBase = BUILDING_FLOORS[floorId].elevationY;
       if (a) {
         this.followSelectedAgent = true;
         this.cameraTransitionActive = true;
-        this.activeCameraGoalTarget.set(a.x, 0.25, a.z + 1.0);
-        this.activeCameraGoalPos.set(a.x + 5.6, 5.4, a.z + 6.4);
+        this.activeCameraGoalTarget.set(a.x, yBase + 0.35, a.z + 0.8);
+        this.activeCameraGoalPos.set(a.x + 5.6, yBase + 5.4, a.z + 6.4);
       }
-    } else if (!agentId) {
-      this.followSelectedAgent = false;
     }
   }
 
-  public runOfficeCommand(command: OfficeCommand): void {
-    this.simState = dispatchOfficeCommand(this.simState, command);
-    this.callbacks.onStateSnapshot(this.simState);
+  public runOfficeCommand(command: OfficeCommand, scope: FloorViewMode = 'all'): void {
+    this.buildingState = dispatchBuildingCommand(this.buildingState, command, scope);
+    this.callbacks.onStateSnapshot(this.buildingState);
   }
 
-  public startAgentTask(agentId: AgentId, taskId: string, prompt: string): void {
-    this.simState = assignAgentTask(this.simState, agentId, taskId, prompt);
-    this.callbacks.onStateSnapshot(this.simState);
+  public startAgentTask(
+    floorId: FloorId,
+    agentId: AgentId,
+    taskId: string,
+    prompt: string
+  ): void {
+    this.buildingState = assignFloorAgentTask(
+      this.buildingState,
+      floorId,
+      agentId,
+      taskId,
+      prompt
+    );
+    this.callbacks.onStateSnapshot(this.buildingState);
   }
 
-  public finishAgentTask(agentId: AgentId, taskId: string, ok: boolean): void {
-    this.simState = ok
-      ? completeAgentTask(this.simState, agentId, taskId)
-      : failAgentTask(this.simState, agentId, taskId);
-    this.callbacks.onStateSnapshot(this.simState);
+  public finishAgentTask(
+    floorId: FloorId,
+    agentId: AgentId,
+    taskId: string,
+    ok: boolean
+  ): void {
+    this.buildingState = ok
+      ? completeFloorAgentTask(this.buildingState, floorId, agentId, taskId)
+      : failFloorAgentTask(this.buildingState, floorId, agentId, taskId);
+    this.callbacks.onStateSnapshot(this.buildingState);
   }
 
   public projectVideoToOffice(
     videoDataUrl: string | null,
     aspectRatio: VideoAspectRatio = '16:9',
-    focusCamera = true
+    focusCamera = true,
+    floorId: FloorId = 1
   ): void {
+    // Reset previous floor's screen if switching floors
+    if (this.activeVideoFloor && this.activeVideoFloor !== floorId) {
+      const prevScreen = this.parts.meetingScreensByFloor[this.activeVideoFloor];
+      prevScreen.mat.map = this.textures.screens.meeting;
+      prevScreen.mat.emissiveMap = this.textures.screens.meeting;
+      prevScreen.mat.emissive.setHex(0xbfdbfe);
+      prevScreen.mat.needsUpdate = true;
+      prevScreen.mesh.scale.set(1, 1, 1);
+    }
+
     this.disposeActiveVideo();
 
-    const mat = this.parts.meetingScreenMat;
-    const mesh = this.parts.meetingScreenMesh;
+    const targetScreen = this.parts.meetingScreensByFloor[floorId];
+    const mat = targetScreen.mat;
+    const mesh = targetScreen.mesh;
 
     if (!videoDataUrl) {
-      mat.map = this.textures.screens.meeting;
-      mat.emissiveMap = this.textures.screens.meeting;
-      mat.emissive.setHex(0xbfdbfe);
-      mat.needsUpdate = true;
-      mesh.scale.set(1, 1, 1);
+      for (const fId of FLOOR_ORDER) {
+        const s = this.parts.meetingScreensByFloor[fId];
+        s.mat.map = this.textures.screens.meeting;
+        s.mat.emissiveMap = this.textures.screens.meeting;
+        s.mat.emissive.setHex(0xbfdbfe);
+        s.mat.needsUpdate = true;
+        s.mesh.scale.set(1, 1, 1);
+      }
+      this.activeVideoFloor = null;
       return;
     }
 
@@ -407,9 +490,7 @@ export class OfficeSceneManager {
     video.loop = true;
     video.playsInline = true;
     video.crossOrigin = 'anonymous';
-    video.play().catch(() => {
-      // Autoplay might wait for interaction in some environments; frame still binds safely
-    });
+    video.play().catch(() => {});
 
     const videoTex = new THREE.VideoTexture(video);
     videoTex.colorSpace = THREE.SRGBColorSpace;
@@ -418,6 +499,7 @@ export class OfficeSceneManager {
 
     this.activeVideoEl = video;
     this.activeVideoTexture = videoTex;
+    this.activeVideoFloor = floorId;
 
     const { scaleX, scaleY } = computeScreenFitScale(2.22, 1.22, aspectStringToRatio(aspectRatio));
     mesh.scale.set(scaleX, scaleY, 1);
@@ -429,23 +511,43 @@ export class OfficeSceneManager {
     mat.needsUpdate = true;
 
     if (focusCamera) {
+      this.floorView = floorId;
+      this.applyCutawayVisibility(floorId);
+      const yBase = BUILDING_FLOORS[floorId].elevationY;
       this.followSelectedAgent = false;
-      this.activeCameraGoalPos.set(-3.4, 3.0, 4.4);
-      this.activeCameraGoalTarget.set(-10.8, 2.05, 4.0);
+      this.activeCameraGoalPos.set(-3.4, yBase + 3.0, 4.4);
+      this.activeCameraGoalTarget.set(-10.8, yBase + 2.05, 4.0);
       this.cameraTransitionActive = true;
     }
   }
 
-  public displayImageInOffice(imageDataUrl: string | null, focusCamera = true): void {
-    const mat = this.parts.galleryArtMat;
-    const mesh = this.parts.galleryArtMesh;
+  public displayImageInOffice(
+    imageDataUrl: string | null,
+    focusCamera = true,
+    floorId: FloorId = 1
+  ): void {
+    if (this.activeGalleryFloor && this.activeGalleryFloor !== floorId) {
+      const prevArt = this.parts.galleryArtByFloor[this.activeGalleryFloor];
+      prevArt.mat.map = this.textures.screens.design;
+      prevArt.mat.emissiveMap = this.textures.screens.design;
+      prevArt.mat.needsUpdate = true;
+      prevArt.mesh.scale.set(1, 1, 1);
+    }
+
+    const targetArt = this.parts.galleryArtByFloor[floorId];
+    const mat = targetArt.mat;
+    const mesh = targetArt.mesh;
 
     if (!imageDataUrl) {
       this.disposeActiveGalleryTexture();
-      mat.map = this.textures.screens.design;
-      mat.emissiveMap = this.textures.screens.design;
-      mat.needsUpdate = true;
-      mesh.scale.set(1, 1, 1);
+      for (const fId of FLOOR_ORDER) {
+        const a = this.parts.galleryArtByFloor[fId];
+        a.mat.map = this.textures.screens.design;
+        a.mat.emissiveMap = this.textures.screens.design;
+        a.mat.needsUpdate = true;
+        a.mesh.scale.set(1, 1, 1);
+      }
+      this.activeGalleryFloor = null;
       return;
     }
 
@@ -460,6 +562,7 @@ export class OfficeSceneManager {
       tex.anisotropy = this.renderer.capabilities.getMaxAnisotropy();
       tex.needsUpdate = true;
       this.activeGalleryTexture = tex;
+      this.activeGalleryFloor = floorId;
 
       const mediaAspect =
         img.naturalWidth > 0 && img.naturalHeight > 0
@@ -477,9 +580,12 @@ export class OfficeSceneManager {
     img.src = imageDataUrl;
 
     if (focusCamera) {
+      this.floorView = floorId;
+      this.applyCutawayVisibility(floorId);
+      const yBase = BUILDING_FLOORS[floorId].elevationY;
       this.followSelectedAgent = false;
-      this.activeCameraGoalPos.set(7.9, 2.9, -2.2);
-      this.activeCameraGoalTarget.set(7.7, 2.05, -7.8);
+      this.activeCameraGoalPos.set(7.9, yBase + 2.9, -2.2);
+      this.activeCameraGoalTarget.set(7.7, yBase + 2.05, -7.8);
       this.cameraTransitionActive = true;
     }
   }
@@ -532,13 +638,8 @@ export class OfficeSceneManager {
       k
     );
 
-    // Interior ceiling lights (first 3 are warm architectural lamps, 4th is server core accent)
-    for (let i = 0; i < 3; i++) {
-      this.interiorLights[i].intensity = THREE.MathUtils.lerp(
-        this.interiorLights[i].intensity,
-        cfg.interiorPointIntensity,
-        k
-      );
+    for (const lamp of this.interiorLights) {
+      lamp.intensity = THREE.MathUtils.lerp(lamp.intensity, cfg.interiorPointIntensity, k);
     }
 
     for (const lampMat of this.parts.interiorLampMaterials) {
@@ -568,74 +669,83 @@ export class OfficeSceneManager {
   private syncAgentVisuals(elapsedSec: number): void {
     let anyExecuting = false;
 
-    for (const id of AGENT_ORDER) {
-      const state = this.simState.agents[id];
-      const rig = this.parts.agentRigs[id];
-      if (!state || !rig) continue;
+    for (const floorId of FLOOR_ORDER) {
+      const floorState = this.buildingState.floors[floorId];
+      const floorRigs = this.parts.agentRigsByFloor[floorId];
+      const floorPhase = (floorId - 1) * 2.1;
 
-      rig.root.position.set(state.x, 0, state.z);
-      rig.root.rotation.y = state.yaw;
+      for (let i = 0; i < AGENT_ORDER.length; i++) {
+        const id = AGENT_ORDER[i];
+        const state = floorState.agents[id];
+        const rig = floorRigs[id];
+        if (!state || !rig) continue;
 
-      const isWalking = state.activity === 'walking';
-      const isExecuting = state.activity === 'executing_task' || Boolean(state.activeTaskId);
-      if (isExecuting) anyExecuting = true;
+        rig.root.position.set(state.x, 0, state.z);
+        rig.root.rotation.y = state.yaw;
 
-      if (isWalking) {
-        const stride = Math.sin(elapsedSec * 7.8 + AGENT_ORDER.indexOf(id));
-        rig.bodyGroup.position.y = Math.abs(stride) * 0.045;
-        rig.leftLeg.rotation.x = stride * 0.52;
-        rig.rightLeg.rotation.x = -stride * 0.52;
-        rig.leftArm.rotation.x = -stride * 0.44;
-        rig.rightArm.rotation.x = stride * 0.44;
-        rig.headGroup.rotation.y = Math.sin(elapsedSec * 2.1) * 0.08;
-      } else if (state.seated) {
-        // Seated pose: lower pelvis onto ergonomic chair, bend legs forward, hands typing
-        rig.bodyGroup.position.y = -0.22;
-        rig.leftLeg.rotation.x = -1.25;
-        rig.rightLeg.rotation.x = -1.25;
+        const isWalking = state.activity === 'walking';
+        const isExecuting = state.activity === 'executing_task' || Boolean(state.activeTaskId);
+        if (isExecuting) anyExecuting = true;
 
-        const typingSpeed = isExecuting ? 12.0 : 5.5;
-        const typeWave = Math.sin(elapsedSec * typingSpeed + AGENT_ORDER.indexOf(id) * 1.4);
-        rig.leftArm.rotation.x = -0.95 + typeWave * 0.09;
-        rig.rightArm.rotation.x = -0.95 - typeWave * 0.09;
-        rig.headGroup.rotation.y = Math.sin(elapsedSec * 1.4 + AGENT_ORDER.indexOf(id)) * 0.14;
-      } else {
-        // Standing (presenting at meeting, server rack check, or coffee bar)
-        rig.bodyGroup.position.y = Math.sin(elapsedSec * 2.2 + AGENT_ORDER.indexOf(id)) * 0.015;
-        rig.leftLeg.rotation.x = 0;
-        rig.rightLeg.rotation.x = 0;
-        const gesture = Math.sin(elapsedSec * 3.1 + AGENT_ORDER.indexOf(id)) * 0.15;
-        rig.leftArm.rotation.x = -0.28 + gesture;
-        rig.rightArm.rotation.x = -0.35 - gesture;
-        rig.headGroup.rotation.y = Math.sin(elapsedSec * 1.6) * 0.18;
+        if (isWalking) {
+          const stride = Math.sin(elapsedSec * 7.8 + i + floorPhase);
+          rig.bodyGroup.position.y = Math.abs(stride) * 0.045;
+          rig.leftLeg.rotation.x = stride * 0.52;
+          rig.rightLeg.rotation.x = -stride * 0.52;
+          rig.leftArm.rotation.x = -stride * 0.44;
+          rig.rightArm.rotation.x = stride * 0.44;
+          rig.headGroup.rotation.y = Math.sin(elapsedSec * 2.1 + floorPhase) * 0.08;
+        } else if (state.seated) {
+          rig.bodyGroup.position.y = -0.22;
+          rig.leftLeg.rotation.x = -1.25;
+          rig.rightLeg.rotation.x = -1.25;
+
+          const typingSpeed = isExecuting ? 12.0 : 5.5;
+          const typeWave = Math.sin(elapsedSec * typingSpeed + i * 1.4 + floorPhase);
+          rig.leftArm.rotation.x = -0.95 + typeWave * 0.09;
+          rig.rightArm.rotation.x = -0.95 - typeWave * 0.09;
+          rig.headGroup.rotation.y = Math.sin(elapsedSec * 1.4 + i + floorPhase) * 0.14;
+        } else {
+          rig.bodyGroup.position.y = Math.sin(elapsedSec * 2.2 + i + floorPhase) * 0.015;
+          rig.leftLeg.rotation.x = 0;
+          rig.rightLeg.rotation.x = 0;
+          const gesture = Math.sin(elapsedSec * 3.1 + i + floorPhase) * 0.15;
+          rig.leftArm.rotation.x = -0.28 + gesture;
+          rig.rightArm.rotation.x = -0.35 - gesture;
+          rig.headGroup.rotation.y = Math.sin(elapsedSec * 1.6 + floorPhase) * 0.18;
+        }
+
+        const isSelected =
+          this.selectedTarget?.floorId === floorId && this.selectedTarget?.agentId === id;
+        const isHovered =
+          this.hoveredTarget?.floorId === floorId && this.hoveredTarget?.agentId === id;
+        const ringAlpha = isSelected ? 0.92 : isExecuting ? 0.72 : isHovered ? 0.5 : 0.0;
+        rig.selectionRingMat.opacity = ringAlpha;
+
+        rig.nameSprite.position.y = state.seated ? 1.8 : 2.04;
+        rig.nameSprite.scale.set(
+          isSelected || isHovered ? 1.52 : 1.38,
+          isSelected || isHovered ? 0.4 : 0.36,
+          1
+        );
+
+        rig.taskBeacon.visible = isExecuting;
+        if (isExecuting) {
+          const baseY = state.seated ? 2.12 : 2.36;
+          rig.taskBeacon.position.y = baseY + Math.sin(elapsedSec * 4.5) * 0.06;
+          rig.taskBeacon.rotation.y = elapsedSec * 2.4;
+        }
+
+        rig.badgeGlow.emissiveIntensity = isExecuting ? 1.15 : 0.12;
       }
-
-      // Selection / hover / task highlight ring
-      const isSelected = this.selectedAgentId === id;
-      const isHovered = this.hoveredAgentId === id;
-      const ringAlpha = isSelected ? 0.92 : isExecuting ? 0.72 : isHovered ? 0.5 : 0.0;
-      rig.selectionRingMat.opacity = ringAlpha;
-
-      // Floating nametag hovers cleanly above head & hairstyles (adjusts height when seated)
-      rig.nameSprite.position.y = state.seated ? 1.8 : 2.04;
-      rig.nameSprite.scale.set(
-        isSelected || isHovered ? 1.52 : 1.38,
-        isSelected || isHovered ? 0.4 : 0.36,
-        1
-      );
-
-      // Floating diamond indicator when executing user AI task
-      rig.taskBeacon.visible = isExecuting;
-      if (isExecuting) {
-        const baseY = state.seated ? 2.12 : 2.36;
-        rig.taskBeacon.position.y = baseY + Math.sin(elapsedSec * 4.5) * 0.06;
-        rig.taskBeacon.rotation.y = elapsedSec * 2.4;
-      }
-
-      rig.badgeGlow.emissiveIntensity = isExecuting ? 1.15 : 0.12;
     }
 
-    // Animate server rack LED bars (faster & brighter when AI tasks are running)
+    // Smooth panoramic glass elevator cycle between Lantai 1 (0.04m) and Lantai 3 (9.34m)
+    const maxCabY = FLOOR_HEIGHT * 2;
+    const elevatorWave = 0.5 - 0.5 * Math.cos(elapsedSec * 0.34);
+    this.parts.elevatorCab.position.y = 0.04 + elevatorWave * maxCabY;
+
+    // Animate server rack LED bars across all 3 floors
     const ledSpeed = anyExecuting ? 6.5 : 2.2;
     for (const led of this.parts.serverLeds) {
       const wave = 0.5 + 0.5 * Math.sin(elapsedSec * ledSpeed + led.phase);
@@ -644,11 +754,13 @@ export class OfficeSceneManager {
   }
 
   private updateCamera(dt: number): void {
-    if (this.followSelectedAgent && this.selectedAgentId) {
-      const a = this.simState.agents[this.selectedAgentId];
+    if (this.followSelectedAgent && this.selectedTarget) {
+      const { floorId, agentId } = this.selectedTarget;
+      const a = this.buildingState.floors[floorId]?.agents[agentId];
+      const yBase = BUILDING_FLOORS[floorId].elevationY;
       if (a) {
-        _camGoalTarget.set(a.x, 0.25, a.z + 1.0);
-        _camGoalPos.set(a.x + 5.6, 5.4, a.z + 6.4);
+        _camGoalTarget.set(a.x, yBase + 0.35, a.z + 0.8);
+        _camGoalPos.set(a.x + 5.6, yBase + 5.4, a.z + 6.4);
         const factor = 1 - Math.exp(-5.0 * dt);
         this.controls.target.lerp(_camGoalTarget, factor);
         this.camera.position.lerp(_camGoalPos, factor);
@@ -697,17 +809,16 @@ export class OfficeSceneManager {
     this.lastFrameMs = now;
 
     if (this.simSpeed > 0) {
-      this.simState = stepOfficeSimulation(this.simState, realDt * this.simSpeed);
+      this.buildingState = stepBuildingSimulation(this.buildingState, realDt * this.simSpeed);
     }
 
     this.syncAgentVisuals(now * 0.001);
     this.updateLighting(realDt);
     this.updateCamera(realDt);
 
-    // Throttled HUD snapshot sync (<= 4Hz to keep React smooth)
     if (now - this.lastUiSyncMs > 260) {
       this.lastUiSyncMs = now;
-      this.callbacks.onStateSnapshot(this.simState);
+      this.callbacks.onStateSnapshot(this.buildingState);
     }
 
     this.renderer.render(this.scene, this.camera);

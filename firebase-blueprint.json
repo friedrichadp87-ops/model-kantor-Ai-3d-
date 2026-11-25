@@ -1,0 +1,210 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "Profil pemilik studio yang kompatibel 100% dengan validProfile di proyek kantor-ai-agent-creator",
+      "type": "object",
+      "properties": {
+        "email": {
+          "type": "string",
+          "format": "email",
+          "maxLength": 254
+        },
+        "displayName": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["email", "displayName", "createdAt", "updatedAt"]
+    },
+    "WorkspaceSettings": {
+      "title": "WorkspaceSettings",
+      "description": "Pengaturan non-rahasia Kantor AI 3D (template 3 channel & routing provider AI)",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "channelTemplates": {
+          "type": "object"
+        },
+        "providerConfig": {
+          "type": "object"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      },
+      "required": ["ownerUid", "channelTemplates", "providerConfig", "updatedAt"]
+    },
+    "ShortsQueueItem": {
+      "title": "ShortsQueueItem",
+      "description": "Item antrean produksi YouTube Shorts 3 channel beserta hasil Guardian",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "channelId": {
+          "type": "string",
+          "enum": [
+            "bible-stories-3d",
+            "daily-faith-inspiration",
+            "bible-facts-mysteries",
+            "gkin-hosiana"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "bibleReference": {
+          "type": "string",
+          "maxLength": 160
+        },
+        "durationSeconds": {
+          "type": "number",
+          "enum": [30, 45, 60]
+        },
+        "notes": {
+          "type": "string",
+          "maxLength": 800
+        },
+        "stage": {
+          "type": "string",
+          "enum": [
+            "Ide",
+            "Dalam Produksi",
+            "Siap Publikasi",
+            "Sudah Terbit (manual)"
+          ]
+        },
+        "guardianStatus": {
+          "type": "string",
+          "enum": ["LULUS", "PERLU REVISI", "DITOLAK", "BELUM DICEK"]
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "channelId",
+        "title",
+        "bibleReference",
+        "durationSeconds",
+        "notes",
+        "stage",
+        "guardianStatus",
+        "updatedAt"
+      ]
+    },
+    "AgentTaskRecord": {
+      "title": "AgentTaskRecord",
+      "description": "Riwayat tugas yang dieksekusi oleh salah satu dari 13 agen AI Kantor AI 3D",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "agentId": {
+          "type": "string",
+          "enum": [
+            "ceo",
+            "trend-researcher",
+            "bible-researcher",
+            "scriptwriter",
+            "theological-guardian",
+            "pastoral-checker",
+            "storyboard-artist",
+            "visual-curator",
+            "video-composer",
+            "voice-artist",
+            "video-editor",
+            "seo-publisher",
+            "community-prayer"
+          ]
+        },
+        "prompt": {
+          "type": "string",
+          "maxLength": 2000
+        },
+        "output": {
+          "type": "string",
+          "maxLength": 12000
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 500
+        },
+        "status": {
+          "type": "string",
+          "enum": ["running", "completed", "error"]
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "agentId",
+        "prompt",
+        "output",
+        "error",
+        "status",
+        "createdAt",
+        "completedAt"
+      ]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Dokumen profil pengguna terautentikasi (selaras 100% dengan validProfile proyek kantor-ai-agent-creator)"
+    },
+    "/users/{userId}/workspace/settings": {
+      "schema": { "$ref": "#/entities/WorkspaceSettings" },
+      "description": "Template 3 channel YouTube Shorts dan konfigurasi routing provider non-rahasia Kantor AI 3D"
+    },
+    "/users/{userId}/shortsQueue/{itemId}": {
+      "schema": { "$ref": "#/entities/ShortsQueueItem" },
+      "description": "Antrean produksi konten Shorts 3 channel milik pengguna di Kantor AI 3D"
+    },
+    "/users/{userId}/agentTasks/{taskId}": {
+      "schema": { "$ref": "#/entities/AgentTaskRecord" },
+      "description": "Riwayat tugas dan keluaran dari 13 agen AI milik pengguna di Kantor AI 3D"
+    }
+  }
+}

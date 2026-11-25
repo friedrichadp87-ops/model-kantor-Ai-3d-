@@ -12,12 +12,17 @@ import { createInitialShortsQueue } from './shortsFactory.ts';
 import { createInitialSimulationState } from './simulation.ts';
 
 describe('Workspace Divisions & Division Tools', () => {
-  it('defines all 11 workspace divisions matching the sidebar structure with valid 3D zones', () => {
-    assert.equal(WORKSPACE_DIVISIONS.length, 11);
+  it('defines all 16 workspace divisions including Lantai 1, Lantai 2, and Lantai 3 workflow menus', () => {
+    assert.equal(WORKSPACE_DIVISIONS.length, 16);
     assert.deepEqual(
       WORKSPACE_DIVISIONS.map((d) => d.label),
       [
         'Dashboard',
+        'Performa & Tugas',
+        'Kontrol Kantor 3D',
+        'L1 · Daily Faith',
+        'L2 · Stories 3D',
+        'L3 · Bible Facts',
         'Channel YouTube',
         'AI Agent',
         'Guardian & Komunitas',
@@ -30,6 +35,11 @@ describe('Workspace Divisions & Division Tools', () => {
         'Pengaturan',
       ]
     );
+    assert.equal(getDivisionById('performa-lantai').cameraZone, 'overview');
+    assert.equal(getDivisionById('kontrol-3d').cameraZone, 'overview');
+    assert.equal(getDivisionById('lantai-1').cameraZone, 'overview');
+    assert.equal(getDivisionById('lantai-2').cameraZone, 'overview');
+    assert.equal(getDivisionById('lantai-3').cameraZone, 'overview');
     assert.equal(getDivisionById('analitik-laporan').cameraZone, 'server');
     assert.equal(getDivisionById('video-editor').cameraZone, 'kode');
   });

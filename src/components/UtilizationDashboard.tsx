@@ -1,21 +1,25 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import * as d3 from 'd3';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronUp, ClipboardList } from 'lucide-react';
 import {
-  computeUtilizationSummary,
-  type UtilizationSlice,
-} from '../office/utilization';
-import type {
-  AgentId,
-  LightingPreset,
-  OfficeSimulationState,
-} from '../office/types';
+  BUILDING_FLOORS,
+  computeBuildingUtilization,
+  type BuildingSimulationState,
+  type FloorId,
+  type FloorViewMode,
+} from '../office/buildingFloors';
+import type { UtilizationSlice } from '../office/utilization';
+import type { AgentId, LightingPreset } from '../office/types';
 
 interface UtilizationDashboardProps {
-  simState: OfficeSimulationState;
+  buildingState: BuildingSimulationState;
+  floorView: FloorViewMode;
   lighting: LightingPreset;
-  selectedAgentId: AgentId | null;
-  onSelectAgent: (agentId: AgentId) => void;
+  selectedTarget: { floorId: FloorId; agentId: AgentId } | null;
+  floorDashboardOpen: boolean;
+  onSelectFloorView: (view: FloorViewMode) => void;
+  onSelectAgent: (floorId: FloorId, agentId: AgentId) => void;
+  onOpenFloorDashboard: (floorId?: FloorId) => void;
 }
 
 const CHART_SIZE = 68;
@@ -23,17 +27,22 @@ const OUTER_RADIUS = 31;
 const INNER_RADIUS = 20;
 
 export function UtilizationDashboard({
-  simState,
+  buildingState,
+  floorView,
   lighting,
-  selectedAgentId,
+  selectedTarget,
+  floorDashboardOpen,
+  onSelectFloorView,
   onSelectAgent,
+  onOpenFloorDashboard,
 }: UtilizationDashboardProps) {
   const [expanded, setExpanded] = useState(false);
   const svgRef = useRef<SVGSVGElement | null>(null);
-  const prevArcsRef = useRef<Map<string, d3.PieArcDatum<UtilizationSlice>>>(
-    new Map()
+  const prevArcsRef = useRef<Map<string, d3.PieArcDatum<UtilizationSlice>>>(new Map());
+  const summary = useMemo(
+    () => computeBuildingUtilization(buildingState, floorView),
+    [buildingState, floorView]
   );
-  const summary = useMemo(() => computeUtilizationSummary(simState), [simState]);
 
   const isDark = lighting === 'malam';
   const activeColor = isDark ? '#34d399' : '#059669';
@@ -52,7 +61,6 @@ export function UtilizationDashboard({
         .attr('class', 'pie-root')
         .attr('transform', `translate(${CHART_SIZE / 2}, ${CHART_SIZE / 2})`);
 
-      // Background ring track for visual clarity during transitions
       rootG
         .append('circle')
         .attr('class', 'pie-track')
@@ -133,13 +141,16 @@ export function UtilizationDashboard({
     : 'border-slate-200/95 bg-[#fcfbf8]/95 text-slate-900';
 
   const mutedTextClass = isDark ? 'text-slate-400' : 'text-slate-600';
+  const scopeTitle =
+    floorView === 'all' ? 'Utilisasi 3 Lantai' : `Utilisasi ${BUILDING_FLOORS[floorView].shortLabel}`;
 
   return (
     <section
-      aria-label="Ringkasan utilisasi agen AI"
+      aria-label="Ringkasan utilisasi 39 agen AI pada 3 lantai"
       data-testid="utilization-dashboard"
       data-active-count={summary.activeCount}
       data-idle-count={summary.idleCount}
+      data-total-count={summary.total}
       data-utilization-percent={summary.utilizationPercent}
       className={`pointer-events-auto rounded-xl border px-3.5 py-2.5 shadow-sm transition-colors duration-200 ${surfaceClass}`}
     >
@@ -152,7 +163,7 @@ export function UtilizationDashboard({
             height={CHART_SIZE}
             viewBox={`0 0 ${CHART_SIZE} ${CHART_SIZE}`}
             role="img"
-            aria-label={`Diagram lingkaran utilisasi agen: ${summary.utilizationPercent}% aktif (${summary.activeCount} aktif, ${summary.idleCount} siaga)`}
+            aria-label={`Diagram lingkaran utilisasi agen: ${summary.utilizationPercent}% aktif (${summary.activeCount} aktif, ${summary.idleCount} siaga dari ${summary.total} agen)`}
             data-testid="utilization-pie-svg"
             className="block"
           />
@@ -167,16 +178,14 @@ export function UtilizationDashboard({
         </div>
 
         {/* Summary Metrics (Active vs Idle) */}
-        <div className="min-w-[144px]">
+        <div className="min-w-[154px]">
           <div className="flex items-center justify-between gap-3">
-            <h2 className="text-xs font-semibold tracking-tight">
-              Utilisasi Agen
-            </h2>
+            <h2 className="text-xs font-semibold tracking-tight">{scopeTitle}</h2>
             <button
               type="button"
               onClick={() => setExpanded((prev) => !prev)}
               aria-expanded={expanded}
-              aria-label={expanded ? 'Ringkas daftar agen' : 'Tampilkan rincian agen'}
+              aria-label={expanded ? 'Ringkas daftar agen' : 'Tampilkan rincian 3 lantai'}
               className={`inline-flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[11px] font-medium whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
                 isDark
                   ? 'text-slate-300 hover:bg-slate-800 hover:text-white'
@@ -221,24 +230,82 @@ export function UtilizationDashboard({
               </span>
             </div>
           </div>
+
+          <button
+            type="button"
+            data-testid="open-floor-dashboard-btn"
+            onClick={() => onOpenFloorDashboard(floorView === 'all' ? undefined : floorView)}
+            aria-pressed={floorDashboardOpen}
+            className={`mt-2 inline-flex w-full items-center justify-center gap-1.5 rounded-md border px-2 py-1 text-[11px] font-medium whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
+              floorDashboardOpen
+                ? isDark
+                  ? 'border-slate-200 bg-slate-100 text-slate-950'
+                  : 'border-slate-900 bg-slate-900 text-white'
+                : isDark
+                ? 'border-slate-700 bg-slate-900/70 text-slate-200 hover:border-slate-500 hover:text-white'
+                : 'border-slate-300 bg-white text-slate-800 hover:border-slate-500 hover:bg-slate-50'
+            }`}
+          >
+            <ClipboardList className="h-3 w-3 shrink-0" aria-hidden="true" />
+            <span>Performa &amp; Tugas 3 Lantai</span>
+          </button>
         </div>
       </div>
 
-      {/* Expandable Per-Agent Real-Time Breakdown */}
+      {/* Expandable 3-Floor Summary + Per-Agent Real-Time Breakdown */}
       {expanded && (
         <div
           className={`mt-2.5 border-t pt-2 ${
             isDark ? 'border-slate-800' : 'border-slate-200/90'
           }`}
         >
-          <ul className="max-h-56 space-y-1 overflow-y-auto pr-1" aria-label="Status utilisasi per agen">
-            {summary.agents.map((item) => {
-              const isSelected = selectedAgentId === item.id;
+          {/* Per-Floor Quick Filter */}
+          <div className="mb-2 grid grid-cols-3 gap-1">
+            {summary.byFloor.map((row) => {
+              const isSelectedFloor = floorView === row.floorId;
               return (
-                <li key={item.id}>
+                <button
+                  key={row.floorId}
+                  type="button"
+                  onClick={() => onSelectFloorView(isSelectedFloor ? 'all' : row.floorId)}
+                  className={`rounded-md border px-1.5 py-1 text-left transition-colors ${
+                    isSelectedFloor
+                      ? isDark
+                        ? 'border-sky-400 bg-slate-800 text-white'
+                        : 'border-slate-900 bg-slate-900 text-white'
+                      : isDark
+                      ? 'border-slate-800 bg-slate-900/70 text-slate-300 hover:border-slate-600'
+                      : 'border-slate-200 bg-white text-slate-700 hover:border-slate-400'
+                  }`}
+                >
+                  <div className="flex items-center gap-1">
+                    <span
+                      className="h-2 w-2 shrink-0 rounded-xs"
+                      style={{ backgroundColor: row.accentHex }}
+                      aria-hidden="true"
+                    />
+                    <span className="font-mono text-[10px] font-bold">L{row.floorId}</span>
+                    <span className="ml-auto font-mono text-[10px] tabular-nums">
+                      {row.activeCount}/{row.total}
+                    </span>
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+
+          <ul
+            className="max-h-56 space-y-1 overflow-y-auto pr-1"
+            aria-label="Status utilisasi per karyawan AI"
+          >
+            {summary.agents.map((item) => {
+              const isSelected =
+                selectedTarget?.floorId === item.floorId && selectedTarget?.agentId === item.id;
+              return (
+                <li key={item.key}>
                   <button
                     type="button"
-                    onClick={() => onSelectAgent(item.id)}
+                    onClick={() => onSelectAgent(item.floorId, item.id)}
                     className={`flex w-full items-center justify-between gap-3 rounded-md px-2 py-1 text-left text-xs transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
                       isSelected
                         ? isDark
@@ -255,6 +322,7 @@ export function UtilizationDashboard({
                         style={{ backgroundColor: item.accentHex }}
                         aria-hidden="true"
                       />
+                      <span className="font-mono text-[10px] opacity-75">L{item.floorId}</span>
                       <span className="truncate">{item.name}</span>
                     </span>
                     <span className={`shrink-0 text-[11px] ${mutedTextClass}`}>

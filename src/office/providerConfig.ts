@@ -1,3 +1,5 @@
+import type { ChannelKeySlotStatus } from './productionPipeline';
+
 export type LlmRoutingMode = 'auto' | 'ollama' | 'gemini';
 export type OllamaConnectionMode = 'proxy' | 'browser';
 export type GeminiTextModelId = 'gemini-4-hydrogen' | 'gemini-3.1-flash-lite';
@@ -47,6 +49,8 @@ export interface ServerProviderStatus {
     defaultBaseUrl: string;
     defaultModel: string;
   };
+  channelRouting?: ChannelKeySlotStatus[];
+  ffmpegAvailable?: boolean;
 }
 
 export const PROVIDER_CONFIG_STORAGE_KEY = 'kantor_ai_provider_config_v1';

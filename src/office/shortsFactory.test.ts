@@ -191,9 +191,12 @@ describe('3-Channel YouTube Shorts Factory Domain', () => {
 
   it('manages per-channel templates (script, visual style, duration) with validation and safe merge', () => {
     const defaults = createDefaultChannelTemplates();
-    assert.equal(defaults['bible-stories-3d'].defaultDuration, 45);
-    assert.equal(defaults['daily-faith-inspiration'].defaultDuration, 45);
-    assert.equal(defaults['bible-facts-mysteries'].defaultDuration, 60);
+    assert.equal(defaults['bible-stories-3d'].defaultDuration, 170);
+    assert.equal(defaults['daily-faith-inspiration'].defaultDuration, 170);
+    assert.equal(defaults['bible-facts-mysteries'].defaultDuration, 170);
+    const devotionalBudget = computeScriptWordBudget(170);
+    assert.equal(devotionalBudget.minWords, 340);
+    assert.equal(devotionalBudget.maxWords, 420);
 
     const invalid = validateChannelTemplate({
       channelId: 'bible-stories-3d',
@@ -217,7 +220,7 @@ describe('3-Channel YouTube Shorts Factory Domain', () => {
       'bible-stories-3d': { scriptTemplate: 'bad', visualStyle: 'bad', defaultDuration: 999 },
     });
     assert.equal(merged['daily-faith-inspiration'].defaultDuration, 30);
-    assert.equal(merged['bible-stories-3d'].defaultDuration, 45);
+    assert.equal(merged['bible-stories-3d'].defaultDuration, 170);
 
     const directives = formatTemplatePromptDirectives(merged['daily-faith-inspiration']);
     assert.ok(directives.includes('Hook lembut'));

@@ -1,11 +1,13 @@
 import { useState, type FormEvent } from 'react';
-import { Send, X, Loader2, AlertCircle, Users } from 'lucide-react';
+import { Send, X, Loader2, AlertCircle, Users, KeyRound } from 'lucide-react';
 import { getSpecialistById } from '../office/agentRoster';
+import { BUILDING_FLOORS, type FloorId } from '../office/buildingFloors';
 import { AGENT_PROFILES, ZONE_LABELS } from '../office/layout';
 import { validateTaskPrompt } from '../office/simulation';
 import type { AgentRuntimeState, LightingPreset, TaskEntry } from '../office/types';
 
 interface AgentTaskDrawerProps {
+  floorId: FloorId;
   agent: AgentRuntimeState;
   tasks: TaskEntry[];
   lighting: LightingPreset;
@@ -15,6 +17,7 @@ interface AgentTaskDrawerProps {
 }
 
 export function AgentTaskDrawer({
+  floorId,
   agent,
   tasks,
   lighting,
@@ -27,6 +30,7 @@ export function AgentTaskDrawer({
 
   const profile = AGENT_PROFILES[agent.id];
   const specialist = getSpecialistById(agent.id);
+  const floorCfg = BUILDING_FLOORS[floorId];
   const isDark = lighting === 'malam';
   const isRunning = Boolean(agent.activeTaskId);
   const latestTasks = tasks.slice(0, 3);
@@ -45,7 +49,10 @@ export function AgentTaskDrawer({
 
   return (
     <section
-      aria-label={`Panel tugas untuk ${agent.name}`}
+      aria-label={`Panel tugas untuk ${agent.name} (${floorCfg.label})`}
+      data-testid="agent-task-drawer"
+      data-floor-id={String(floorId)}
+      data-api-key-slot={floorCfg.geminiEnvVar}
       className={`pointer-events-auto mb-2.5 w-full rounded-xl border p-4 shadow-lg transition-colors duration-200 ${
         isDark
           ? 'border-slate-700/90 bg-[#0f172a]/95 text-slate-100'
@@ -55,15 +62,24 @@ export function AgentTaskDrawer({
       {/* Header Row */}
       <div className="flex items-start justify-between gap-4">
         <div className="min-w-0">
-          <div className="flex items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
             <span
               className="h-3 w-3 shrink-0 rounded-sm"
-              style={{ backgroundColor: agent.accentHex }}
+              style={{ backgroundColor: floorCfg.accentHex }}
               aria-hidden="true"
             />
             <h2 className="truncate text-base font-semibold tracking-tight">
               {agent.name}
             </h2>
+            <span
+              className={`rounded border px-1.5 py-0.5 font-mono text-[10px] font-semibold ${
+                isDark
+                  ? 'border-slate-700 bg-slate-800 text-slate-200'
+                  : 'border-slate-200 bg-slate-100 text-slate-700'
+              }`}
+            >
+              {floorCfg.label} · {floorCfg.channelName}
+            </span>
             <span
               className={`text-xs ${isDark ? 'text-slate-400' : 'text-slate-500'}`}
             >
@@ -71,25 +87,26 @@ export function AgentTaskDrawer({
             </span>
           </div>
           <p
-            className={`mt-1 text-xs ${
+            className={`mt-1 flex flex-wrap items-center gap-x-1.5 gap-y-0.5 text-xs ${
               isDark ? 'text-slate-300' : 'text-slate-600'
             }`}
           >
             <span>{ZONE_LABELS[agent.currentZone]}</span>
-            <span className="mx-1.5" aria-hidden="true">
-              ·
-            </span>
+            <span aria-hidden="true">·</span>
             <span>{agent.statusLabel}</span>
             {specialist && (
               <>
-                <span className="mx-1.5" aria-hidden="true">
-                  ·
-                </span>
+                <span aria-hidden="true">·</span>
                 <span>
                   {specialist.jobTitleId} · Divisi {specialist.divisionLabel}
                 </span>
               </>
             )}
+            <span aria-hidden="true">·</span>
+            <span className="inline-flex items-center gap-1 font-mono text-[11px]">
+              <KeyRound className="h-3 w-3 shrink-0" aria-hidden="true" />
+              {floorCfg.geminiEnvVar}
+            </span>
           </p>
         </div>
 
@@ -105,7 +122,7 @@ export function AgentTaskDrawer({
               }`}
             >
               <Users className="h-3.5 w-3.5" aria-hidden="true" />
-              Direktori 13 Agen
+              Direktori 39 Agen
             </button>
           )}
           <button

@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#0f172a"/>
+      <stop offset="100%" stop-color="#1e293b"/>
+    </linearGradient>
+  </defs>
+  <rect width="512" height="512" rx="108" fill="url(#bg)"/>
+  <!-- Floor 3: Emerald (Bible Facts & Mysteries) -->
+  <polygon points="256,96 392,162 256,228 120,162" fill="#10b981"/>
+  <polygon points="120,162 256,228 256,262 120,196" fill="#059669"/>
+  <polygon points="392,162 256,228 256,262 392,196" fill="#047857"/>
+  <!-- Floor 2: Cobalt Blue (Bible Stories 3D) -->
+  <polygon points="256,192 392,258 256,324 120,258" fill="#3b82f6"/>
+  <polygon points="120,258 256,324 256,358 120,292" fill="#2563eb"/>
+  <polygon points="392,258 256,324 256,358 392,292" fill="#1d4ed8"/>
+  <!-- Floor 1: Warm Amber (Daily Faith & Inspiration) -->
+  <polygon points="256,288 392,354 256,420 120,354" fill="#f59e0b"/>
+  <polygon points="120,354 256,420 256,454 120,388" fill="#d97706"/>
+  <polygon points="392,354 256,420 256,454 392,388" fill="#b45309"/>
+  <!-- Subtle architectural highlight on top diamond -->
+  <polygon points="256,118 346,162 256,206 166,162" fill="#ffffff" fill-opacity="0.16"/>
+</svg>
