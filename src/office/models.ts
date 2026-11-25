@@ -328,35 +328,42 @@ export function buildOfficeScene(
  */
 function createFloorSignTexture(floorCfg: FloorConfig): THREE.CanvasTexture {
   const canvas = document.createElement('canvas');
-  canvas.width = 768;
-  canvas.height = 128;
+  canvas.width = 1600;
+  canvas.height = 256;
   const ctx = canvas.getContext('2d')!;
 
-  ctx.fillStyle = '#0f172a';
+  // Deep matte slate background with crisp high-contrast framing
+  ctx.fillStyle = '#0b1220';
   ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-  // Left channel color accent bar
+  // Subtle inner frame border for crisp edge definition at isometric distance
+  ctx.strokeStyle = '#334155';
+  ctx.lineWidth = 4;
+  ctx.strokeRect(2, 2, canvas.width - 4, canvas.height - 4);
+
+  // Bold channel-colored left badge & bottom accent strip
   ctx.fillStyle = floorCfg.accentHex;
-  ctx.fillRect(0, 0, 22, canvas.height);
+  ctx.fillRect(0, 0, 38, canvas.height);
+  ctx.fillRect(0, canvas.height - 14, canvas.width, 14);
 
-  // Bottom hairline highlight
-  ctx.fillStyle = floorCfg.accentHex;
-  ctx.fillRect(0, canvas.height - 8, canvas.width, 8);
+  // Floor number badge block inside left margin
+  ctx.fillStyle = '#ffffff';
+  ctx.font = '800 68px "Plus Jakarta Sans", system-ui, -apple-system, sans-serif';
+  ctx.textBaseline = 'middle';
+  const titleText = `LANTAI ${floorCfg.floorId} · ${floorCfg.channelName.toUpperCase()}`;
+  ctx.fillText(titleText, 68, 96, canvas.width - 104);
 
-  ctx.fillStyle = '#f8fafc';
-  ctx.font = '700 38px "Plus Jakarta Sans", system-ui, sans-serif';
-  ctx.fillText(
-    `LANTAI ${floorCfg.floorId}  ·  ${floorCfg.channelName.toUpperCase()}`,
-    44,
-    58
-  );
-
-  ctx.fillStyle = '#94a3b8';
-  ctx.font = '500 22px "IBM Plex Mono", monospace';
-  ctx.fillText(`13 AGEN AI  ·  API SLOT: ${floorCfg.geminiEnvVar}`, 44, 98);
+  // High-contrast crisp subtitle line
+  ctx.fillStyle = '#cbd5e1';
+  ctx.font = '600 40px "IBM Plex Mono", ui-monospace, monospace';
+  const subtitleText = `13 AGEN AI · ${floorCfg.geminiEnvVar}`;
+  ctx.fillText(subtitleText, 68, 182, canvas.width - 104);
 
   const tex = new THREE.CanvasTexture(canvas);
   tex.colorSpace = THREE.SRGBColorSpace;
+  tex.anisotropy = 16;
+  tex.minFilter = THREE.LinearMipmapLinearFilter;
+  tex.magFilter = THREE.LinearFilter;
   tex.needsUpdate = true;
   return tex;
 }
@@ -625,32 +632,50 @@ function buildArchitecturalShell(
   group.add(frontCornerShoe);
 
   // Channel-colored glowing fascia band along South & East slab edges
+  // Ground floor plinth extends further (+0.43) than upper slabs (+0.31), so offset per floor cleanly.
+  const isGroundFloor = floorCfg.floorId === 1;
+  const bandEdgeOffset = isGroundFloor ? 0.435 : 0.315;
+  const bandSpanPad = isGroundFloor ? 0.88 : 0.64;
+  const bandY = isGroundFloor ? -0.26 : -0.21;
+
   const southBand = new THREE.Mesh(
-    new THREE.BoxGeometry(width + 0.64, 0.07, 0.05),
+    new THREE.BoxGeometry(width + bandSpanPad, 0.07, 0.05),
     floorAccentMat
   );
-  southBand.position.set(0, -0.18, depth / 2 + 0.31);
+  southBand.position.set(0, bandY, depth / 2 + bandEdgeOffset);
   group.add(southBand);
 
   const eastBand = new THREE.Mesh(
-    new THREE.BoxGeometry(0.05, 0.07, depth + 0.64),
+    new THREE.BoxGeometry(0.05, 0.07, depth + bandSpanPad),
     floorAccentMat
   );
-  eastBand.position.set(width / 2 + 0.31, -0.18, 0);
+  eastBand.position.set(width / 2 + bandEdgeOffset, bandY, 0);
   group.add(eastBand);
 
   // Crisp procedural CanvasTexture Floor + YouTube Channel Fascia Plaque on South edge
+  // Mounted cleanly proud of the slab & trim with a 6-face material array so ONLY the +Z front
+  // face displays the high-res typography (zero Z-fighting, zero slab slicing, zero edge smear).
   const signTex = createFloorSignTexture(floorCfg);
-  const signMat = new THREE.MeshStandardMaterial({
+  const signFaceMat = new THREE.MeshStandardMaterial({
     map: signTex,
     emissive: new THREE.Color(0xffffff),
     emissiveMap: signTex,
-    emissiveIntensity: 0.42,
-    roughness: 0.3,
-    metalness: 0.1,
+    emissiveIntensity: 0.48,
+    roughness: 0.48,
+    metalness: 0.05,
   });
-  const fasciaPlaque = new THREE.Mesh(new THREE.BoxGeometry(5.8, 0.72, 0.08), signMat);
-  fasciaPlaque.position.set(5.4, -0.18, depth / 2 + 0.36);
+  const signFrameMat = mats.matteBlackMetal;
+  const signMaterials: THREE.Material[] = [
+    signFrameMat, // +X
+    signFrameMat, // -X
+    signFrameMat, // +Y
+    signFrameMat, // -Y
+    signFaceMat,  // +Z (front readable face)
+    signFrameMat, // -Z
+  ];
+  const plaqueZ = isGroundFloor ? depth / 2 + 0.51 : depth / 2 + 0.41;
+  const fasciaPlaque = new THREE.Mesh(new THREE.BoxGeometry(6.0, 0.96, 0.09), signMaterials);
+  fasciaPlaque.position.set(5.4, 0.02, plaqueZ);
   group.add(fasciaPlaque);
 
   // Main oak parquet floor (solid 0.04m slab with top cleanly at y = 0.0)
@@ -819,13 +844,13 @@ function buildArchitecturalShell(
     group.add(diffuser);
   }
 
-  // Floor & Channel emblem on North wall above Server Core
-  const wallSignBoard = new THREE.Mesh(new THREE.BoxGeometry(4.4, 0.62, 0.06), signMat);
-  wallSignBoard.position.set(2.6, 3.56, -7.85);
+  // Floor & Channel emblem on North wall above Server Core (exact 6.25:1 aspect match)
+  const wallSignBoard = new THREE.Mesh(new THREE.BoxGeometry(4.5, 0.72, 0.07), signMaterials);
+  wallSignBoard.position.set(2.6, 3.58, -7.84);
   group.add(wallSignBoard);
 
-  const signAccent = new THREE.Mesh(new THREE.BoxGeometry(4.44, 0.05, 0.07), floorAccentMat);
-  signAccent.position.set(2.6, 3.22, -7.84);
+  const signAccent = new THREE.Mesh(new THREE.BoxGeometry(4.54, 0.05, 0.08), floorAccentMat);
+  signAccent.position.set(2.6, 3.19, -7.83);
   group.add(signAccent);
 
   return group;
