@@ -13,10 +13,13 @@ import type {
   OrchestratorStageEvent,
 } from './components/ProductionOrchestratorDrawer';
 import {
+  deleteMasterBibleFromFirestore,
+  loadMasterBibleFromFirestore,
   subscribeAuthUser,
   subscribeShortsQueue,
   subscribeWorkspaceSettings,
   syncAgentTaskToFirestore,
+  syncMasterBibleToFirestore,
   syncShortsQueueItemToFirestore,
   syncUserProfileToFirestore,
   syncWorkspaceSettingsToFirestore,
@@ -65,6 +68,8 @@ import {
 import {
   buildMasterBibleSystemPolicy,
   parseMasterBibleContent,
+  syncMasterBibleToBackend,
+  type MasterBibleSyncMode,
 } from './office/masterBible';
 import {
   clearMasterBibleFromIndexedDb,
@@ -100,6 +105,11 @@ import type {
   OfficeZoneId,
   TaskEntry,
 } from './office/types';
+import {
+  readSetupGuideDismissed,
+  shouldAutoOpenSetupGuide,
+  writeSetupGuideDismissed,
+} from './office/setupGuide';
 
 function createInitialFloorTasksMap(): Record<string, TaskEntry[]> {
   const map: Record<string, TaskEntry[]> = {};
@@ -155,8 +165,13 @@ export default function App() {
   const [controlsOpen, setControlsOpen] = useState<boolean>(false);
   const [selectedSpecialistId, setSelectedSpecialistId] = useState<SpecialistAgentId | null>(null);
   const [masterBible, setMasterBible] = useState<LocalBibleDatabase | null>(null);
+  const masterBibleRef = useRef<LocalBibleDatabase | null>(null);
+  masterBibleRef.current = masterBible;
   const [masterBibleBusy, setMasterBibleBusy] = useState<boolean>(false);
   const [masterBibleError, setMasterBibleError] = useState<string | null>(null);
+  const [masterBibleSyncMode, setMasterBibleSyncMode] =
+    useState<MasterBibleSyncMode>('server-synced');
+  const [masterBibleSyncNotice, setMasterBibleSyncNotice] = useState<string | null>(null);
   const [orchestratorPrefill, setOrchestratorPrefill] = useState<OrchestratorPrefill | null>(null);
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>(() => {
     try {
@@ -186,6 +201,19 @@ export default function App() {
   const [firebaseUser, setFirebaseUser] = useState<FirebaseAuthUserSummary | null>(null);
   const [firebaseAuthLoading, setFirebaseAuthLoading] = useState<boolean>(true);
   const [firebaseModalOpen, setFirebaseModalOpen] = useState<boolean>(false);
+  const [setupGuideOpen, setSetupGuideOpen] = useState<boolean>(() =>
+    shouldAutoOpenSetupGuide({
+      dismissedFlag: readSetupGuideDismissed(),
+      searchQuery: typeof window !== 'undefined' ? window.location.search : '',
+    })
+  );
+  const handleCloseSetupGuide = useCallback((dontShowAgain: boolean) => {
+    writeSetupGuideDismissed(dontShowAgain);
+    setSetupGuideOpen(false);
+  }, []);
+  const handleOpenSetupGuide = useCallback(() => {
+    setSetupGuideOpen(true);
+  }, []);
   const [firebaseSyncStatus, setFirebaseSyncStatus] = useState<FirestoreSyncStatus>({
     connection: 'checking',
     state: 'idle',
@@ -240,20 +268,14 @@ export default function App() {
     void loadMasterBibleFromIndexedDb().then(async (saved) => {
       if (!active || !saved) return;
       setMasterBible(saved);
-      try {
-        await fetch('/api/bible/master', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ database: saved }),
-        });
-      } catch {
-        // Non-blocking sync retry occurs on next upload
-      }
+      const outcome = await syncMasterBibleToBackend(saved);
       if (!active) return;
+      setMasterBibleSyncMode(outcome.mode);
+      setMasterBibleSyncNotice(outcome.notice);
       setActivityLog((prev) =>
         appendActivityLog(prev, [
           createStudioActivityEntry(
-            `Master Alkitab TB aktif di L1, L2 & L3 (${saved.report.sourceName} · ${saved.report.indexedVerseCount.toLocaleString('id-ID')} ayat)`
+            `Master Alkitab TB aktif di L1, L2 & L3 (${saved.report.sourceName} · ${saved.report.indexedVerseCount.toLocaleString('id-ID')} ayat${outcome.mode === 'local-only' ? ' · Mode Lokal' : ''})`
           ),
         ])
       );
@@ -359,7 +381,64 @@ export default function App() {
       handleSubError
     );
 
+    // Sync Master Alkitab Terjemahan Baru (TB) bi-directionally with Firebase Cloud Firestore
+    let bibleSyncActive = true;
+    void loadMasterBibleFromFirestore(uid).then(async (cloudRes) => {
+      if (!bibleSyncActive) return;
+      if (!cloudRes.ok && cloudRes.permissionDenied) {
+        if (masterBibleRef.current) {
+          setMasterBibleSyncMode('local-only');
+          setMasterBibleSyncNotice(
+            'Alkitab aktif di browser. Tambahkan aturan Firestore Rules untuk masterBible & masterBibleChunks (buka menu Firebase) agar tersimpan di Cloud.'
+          );
+        }
+        return;
+      }
+
+      const cloudBible = cloudRes.database;
+      if (cloudBible) {
+        await saveMasterBibleToIndexedDb(cloudBible).catch(() => undefined);
+        if (!bibleSyncActive) return;
+        setMasterBible(cloudBible);
+        setMasterBibleSyncMode('firebase-synced');
+        setMasterBibleSyncNotice(null);
+        void syncMasterBibleToBackend(cloudBible);
+        setActivityLog((prev) =>
+          appendActivityLog(prev, [
+            createStudioActivityEntry(
+              `Master Alkitab TB dimuat dari Firebase Cloud Firestore (${cloudBible.report.bookCount} kitab · ${cloudBible.report.indexedVerseCount.toLocaleString('id-ID')} ayat)`
+            ),
+          ])
+        );
+        return;
+      }
+
+      // Firestore does not have Master Alkitab yet — push local IndexedDB copy automatically!
+      const localBible = masterBibleRef.current ?? (await loadMasterBibleFromIndexedDb());
+      if (!bibleSyncActive || !localBible) return;
+      const pushRes = await syncMasterBibleToFirestore(uid, localBible);
+      if (!bibleSyncActive) return;
+      if (pushRes.ok) {
+        setMasterBibleSyncMode('firebase-synced');
+        setMasterBibleSyncNotice(
+          `Tersimpan di Firebase Firestore (${pushRes.chunkCount ?? 1} bagian) — otomatis sinkron di PC, Android & Netlify.`
+        );
+        setActivityLog((prev) =>
+          appendActivityLog(prev, [
+            createStudioActivityEntry(
+              `Master Alkitab TB berhasil disinkronkan ke Firebase Cloud Firestore (${localBible.report.indexedVerseCount.toLocaleString('id-ID')} ayat)`
+            ),
+          ])
+        );
+      } else if (pushRes.permissionDenied) {
+        setMasterBibleSyncNotice(
+          'Alkitab aktif di browser. Tambahkan aturan Firestore Rules untuk masterBible & masterBibleChunks (buka panel Firebase) agar tersimpan di Cloud.'
+        );
+      }
+    });
+
     return () => {
+      bibleSyncActive = false;
       unsubSettings();
       unsubQueue();
     };
@@ -381,17 +460,29 @@ export default function App() {
     const queueResults = await Promise.all(
       shortsQueue.slice(0, 12).map((item) => syncShortsQueueItemToFirestore(firebaseUser.uid, item))
     );
-    const firstDenied = [profileRes, settingsRes, ...queueResults].find((r) => r.permissionDenied);
+    const bibleRes = masterBible
+      ? await syncMasterBibleToFirestore(firebaseUser.uid, masterBible)
+      : null;
+    if (bibleRes?.ok) {
+      setMasterBibleSyncMode('firebase-synced');
+      setMasterBibleSyncNotice(
+        `Tersimpan di Firebase Firestore (${bibleRes.chunkCount ?? 1} bagian) — otomatis sinkron di PC, Android & Netlify.`
+      );
+    }
+    const allResults = bibleRes
+      ? [profileRes, settingsRes, ...queueResults, bibleRes]
+      : [profileRes, settingsRes, ...queueResults];
+    const firstDenied = allResults.find((r) => r.permissionDenied);
     if (firstDenied) {
       setFirebaseSyncStatus((prev) => ({
         ...prev,
         state: 'permission-denied',
         blockedPath: firstDenied.path,
-        message: `Firestore Rules menolak penulisan ke ${firstDenied.path}. Kirimkan isi Firestore Rules Anda agar bisa langsung disesuaikan.`,
+        message: `Firestore Rules menolak penulisan ke ${firstDenied.path}. Salin aturan Firestore Rules pada panel ini lalu publikasikan di Firebase Console.`,
       }));
       return;
     }
-    const firstError = [profileRes, settingsRes, ...queueResults].find((r) => !r.ok);
+    const firstError = allResults.find((r) => !r.ok);
     if (firstError) {
       setFirebaseSyncStatus((prev) => ({
         ...prev,
@@ -406,9 +497,9 @@ export default function App() {
       state: 'synced',
       lastSyncedAt: new Date().toISOString(),
       blockedPath: null,
-      message: `Sinkronisasi berhasil (${shortsQueue.length} item antrean & template 3 channel tersimpan di Firestore).`,
+      message: `Sinkronisasi berhasil (${shortsQueue.length} item antrean, template 3 channel${masterBible ? ', & Master Alkitab TB' : ''} tersimpan di Firestore).`,
     }));
-  }, [firebaseUser, channelTemplates, providerConfig, shortsQueue]);
+  }, [firebaseUser, channelTemplates, providerConfig, shortsQueue, masterBible]);
 
   const handleStateSnapshot = useCallback((next: BuildingSimulationState) => {
     const prevBuilding = prevBuildingRef.current;
@@ -848,52 +939,85 @@ export default function App() {
     []
   );
 
-  const handleUploadMasterBibleFile = useCallback(async (file: File) => {
-    setMasterBibleBusy(true);
-    setMasterBibleError(null);
-    try {
-      const rawText = await file.text();
-      const parsed = parseMasterBibleContent(rawText, file.name);
-      await saveMasterBibleToIndexedDb(parsed);
+  const handleUploadMasterBibleFile = useCallback(
+    async (file: File) => {
+      setMasterBibleBusy(true);
+      setMasterBibleError(null);
+      setMasterBibleSyncNotice(null);
+      try {
+        const rawText = await file.text();
+        const parsed = parseMasterBibleContent(rawText, file.name);
+        await saveMasterBibleToIndexedDb(parsed);
 
-      const syncRes = await fetch('/api/bible/master', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ database: parsed }),
-      });
-      if (!syncRes.ok) {
-        const errJson = (await syncRes.json().catch(() => ({}))) as { error?: string };
-        throw new Error(errJson.error || 'Gagal menyinkronkan Master Alkitab ke server.');
+        // Activate immediately in browser state across L1, L2 & L3
+        setMasterBible(parsed);
+
+        // 1. Primary cloud persistence: save chunked Master Alkitab directly to Firebase Firestore when signed in
+        let savedToFirebase = false;
+        let firebaseNotice: string | null = null;
+        if (firebaseUser) {
+          const fbRes = await syncMasterBibleToFirestore(firebaseUser.uid, parsed);
+          if (fbRes.ok) {
+            savedToFirebase = true;
+            firebaseNotice = `Tersimpan di Firebase Firestore (${fbRes.chunkCount ?? 1} bagian) — otomatis sinkron di PC, Android & Netlify.`;
+          } else if (fbRes.permissionDenied) {
+            firebaseNotice =
+              'Alkitab aktif di browser. Tambahkan aturan Firestore Rules untuk masterBible & masterBibleChunks (buka panel Firebase) agar tersimpan di Cloud.';
+          } else {
+            firebaseNotice = `Alkitab aktif di browser. Sinkronisasi Firebase tertunda (${fbRes.errorMessage || 'coba lagi'}).`;
+          }
+        }
+
+        // 2. Non-blocking backend memory sync (for local/Cloud Run server AI agents)
+        const backendOutcome = await syncMasterBibleToBackend(parsed);
+
+        if (savedToFirebase) {
+          setMasterBibleSyncMode('firebase-synced');
+          setMasterBibleSyncNotice(firebaseNotice);
+        } else {
+          setMasterBibleSyncMode(backendOutcome.mode);
+          setMasterBibleSyncNotice(
+            firebaseNotice ??
+              (firebaseUser
+                ? backendOutcome.notice
+                : 'Alkitab aktif di browser (IndexedDB). Masuk ke akun Firebase agar Alkitab otomatis tersimpan di Cloud Firestore.')
+          );
+        }
+
+        setActivityLog((prev) =>
+          appendActivityLog(prev, [
+            createStudioActivityEntry(
+              `Master Alkitab TB diunggah & aktif di L1, L2 & L3: ${parsed.report.sourceName} (${parsed.report.bookCount} kitab · ${parsed.report.indexedVerseCount.toLocaleString('id-ID')} ayat${savedToFirebase ? ' · Tersimpan di Firebase' : ''})`
+            ),
+          ])
+        );
+      } catch (err) {
+        const msg =
+          err instanceof Error ? err.message : 'Gagal membaca file Alkitab Terjemahan Baru.';
+        setMasterBibleError(msg);
+      } finally {
+        setMasterBibleBusy(false);
       }
-
-      setMasterBible(parsed);
-      setActivityLog((prev) =>
-        appendActivityLog(prev, [
-          createStudioActivityEntry(
-            `Master Alkitab TB diunggah & aktif di L1, L2 & L3: ${parsed.report.sourceName} (${parsed.report.bookCount} kitab · ${parsed.report.indexedVerseCount.toLocaleString('id-ID')} ayat)`
-          ),
-        ])
-      );
-    } catch (err) {
-      const msg =
-        err instanceof Error ? err.message : 'Gagal membaca file Alkitab Terjemahan Baru.';
-      setMasterBibleError(msg);
-    } finally {
-      setMasterBibleBusy(false);
-    }
-  }, []);
+    },
+    [firebaseUser]
+  );
 
   const handleClearMasterBible = useCallback(async () => {
     setMasterBibleBusy(true);
     setMasterBibleError(null);
+    setMasterBibleSyncNotice(null);
     try {
       await clearMasterBibleFromIndexedDb();
+      if (firebaseUser) {
+        await deleteMasterBibleFromFirestore(firebaseUser.uid).catch(() => undefined);
+      }
       await fetch('/api/bible/master', { method: 'DELETE' }).catch(() => undefined);
       setMasterBible(null);
+      setMasterBibleSyncMode('server-synced');
       setActivityLog((prev) =>
         appendActivityLog(prev, [
           createStudioActivityEntry(
-            'Master Alkitab Terjemahan Baru dihapus dari memori lokal & server'
+            `Master Alkitab Terjemahan Baru dihapus dari memori lokal${firebaseUser ? ', Firebase Cloud' : ''} & server`
           ),
         ])
       );
@@ -904,7 +1028,7 @@ export default function App() {
     } finally {
       setMasterBibleBusy(false);
     }
-  }, []);
+  }, [firebaseUser]);
 
   const handleDevotionalResearchEvent = useCallback(
     (phase: 'start' | 'done' | 'error', detail: string) => {
@@ -1638,17 +1762,22 @@ export default function App() {
         masterBible={masterBible}
         masterBibleBusy={masterBibleBusy}
         masterBibleError={masterBibleError}
+        masterBibleSyncMode={masterBibleSyncMode}
+        masterBibleSyncNotice={masterBibleSyncNotice}
         orchestratorPrefill={orchestratorPrefill}
         firebaseUser={firebaseUser}
         firebaseAuthLoading={firebaseAuthLoading}
         firebaseSyncStatus={firebaseSyncStatus}
         firebaseModalOpen={firebaseModalOpen}
+        setupGuideOpen={setupGuideOpen}
         onSelectFloorView={handleSelectFloorView}
         onSelectZone={handleSelectZone}
         onSelectDivision={handleSelectDivision}
         onToggleSidebar={() => setSidebarCollapsed((prev) => !prev)}
         onOpenFirebaseAuth={() => setFirebaseModalOpen(true)}
         onCloseFirebaseAuth={() => setFirebaseModalOpen(false)}
+        onOpenSetupGuide={handleOpenSetupGuide}
+        onCloseSetupGuide={handleCloseSetupGuide}
         onSyncFirebaseNow={handleSyncFirebaseNow}
         onSelectLighting={handleSelectLighting}
         onSelectSpeed={handleSelectSpeed}

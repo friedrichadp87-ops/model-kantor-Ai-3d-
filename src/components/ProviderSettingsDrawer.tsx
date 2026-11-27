@@ -1,6 +1,7 @@
 import { useEffect, useId, useState, type FormEvent } from 'react';
 import {
   AlertCircle,
+  BookOpen,
   CheckCircle2,
   Cloud,
   Cpu,
@@ -37,17 +38,19 @@ import {
 } from '../office/providerConfig';
 import type { LightingPreset } from '../office/types';
 
-type ProviderTab = 'ollama' | 'gemini' | 'elevenlabs' | 'firebase';
+export type ProviderTab = 'ollama' | 'gemini' | 'elevenlabs' | 'firebase';
 
 interface ProviderSettingsDrawerProps {
   lighting: LightingPreset;
   config: ProviderConfig;
+  initialTab?: ProviderTab;
   firebaseUser: FirebaseAuthUserSummary | null;
   firebaseSyncStatus: FirestoreSyncStatus;
   onSaveConfig: (next: ProviderConfig) => void;
   onResetConfig: () => void;
   onOpenChannelTemplates: () => void;
   onOpenFirebaseAuth: () => void;
+  onOpenSetupGuide?: () => void;
   onVoiceSynthesisEvent?: (phase: 'start' | 'done' | 'error', label: string) => void;
   onClose: () => void;
 }
@@ -68,16 +71,22 @@ interface ElevenLabsVoiceItem {
 export function ProviderSettingsDrawer({
   lighting,
   config,
+  initialTab = 'ollama',
   firebaseUser,
   firebaseSyncStatus,
   onSaveConfig,
   onResetConfig,
   onOpenChannelTemplates,
   onOpenFirebaseAuth,
+  onOpenSetupGuide,
   onVoiceSynthesisEvent,
   onClose,
 }: ProviderSettingsDrawerProps) {
-  const [activeTab, setActiveTab] = useState<ProviderTab>('ollama');
+  const [activeTab, setActiveTab] = useState<ProviderTab>(initialTab);
+
+  useEffect(() => {
+    setActiveTab(initialTab);
+  }, [initialTab]);
   const [draft, setDraft] = useState<ProviderConfig>(config);
   const [saveNotice, setSaveNotice] = useState<string | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
@@ -394,6 +403,21 @@ export function ProviderSettingsDrawer({
         </div>
 
         <div className="flex shrink-0 items-center gap-1.5">
+          {onOpenSetupGuide && (
+            <button
+              type="button"
+              onClick={onOpenSetupGuide}
+              data-testid="header-reopen-setup-guide-btn"
+              className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs font-medium whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-blue-600 ${
+                isDark
+                  ? 'border-sky-500/40 bg-sky-950/50 text-sky-200 hover:bg-sky-900/60 hover:text-white'
+                  : 'border-sky-200 bg-sky-50 text-sky-800 hover:bg-sky-100 hover:text-sky-950'
+              }`}
+            >
+              <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+              Panduan Setup API
+            </button>
+          )}
           <button
             type="button"
             onClick={onOpenChannelTemplates}
@@ -819,34 +843,54 @@ export function ProviderSettingsDrawer({
                           : 'Belum terdeteksi di variabel lingkungan server'}
                       </strong>
                       . Untuk mengganti atau menambahkan kunci API Gemini, atur variabel{' '}
-                      <code className="font-mono">GEMINI_API_KEY</code> pada panel{' '}
-                      <strong>Settings &gt; Secrets</strong> — kunci tidak pernah disimpan di browser.
+                      <code className="font-mono">GEMINI_API_KEY</code> di{' '}
+                      <strong>Dashboard Netlify &gt; Site configuration &gt; Environment variables</strong>{' '}
+                      (untuk <code className="font-mono">officecontent.netlify.app</code>) atau{' '}
+                      <strong>Settings &gt; Secrets</strong> di AI Studio — kunci tetap aman di sisi server.
                     </p>
                   </div>
                 </div>
 
-                <button
-                  type="button"
-                  onClick={() => void handleTestGemini()}
-                  disabled={geminiTest.status === 'testing'}
-                  className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors disabled:opacity-60 ${
-                    isDark
-                      ? 'bg-sky-600 text-white hover:bg-sky-500'
-                      : 'bg-slate-900 text-white hover:bg-slate-800'
-                  }`}
-                >
-                  {geminiTest.status === 'testing' ? (
-                    <>
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
-                      Menguji...
-                    </>
-                  ) : (
-                    <>
-                      <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
-                      Uji Koneksi Gemini
-                    </>
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void handleTestGemini()}
+                    disabled={geminiTest.status === 'testing'}
+                    className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors disabled:opacity-60 ${
+                      isDark
+                        ? 'bg-sky-600 text-white hover:bg-sky-500'
+                        : 'bg-slate-900 text-white hover:bg-slate-800'
+                    }`}
+                  >
+                    {geminiTest.status === 'testing' ? (
+                      <>
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" />
+                        Menguji...
+                      </>
+                    ) : (
+                      <>
+                        <Sparkles className="h-3.5 w-3.5" aria-hidden="true" />
+                        Uji Koneksi Gemini
+                      </>
+                    )}
+                  </button>
+
+                  {onOpenSetupGuide && (
+                    <button
+                      type="button"
+                      data-testid="reopen-setup-guide-btn"
+                      onClick={onOpenSetupGuide}
+                      className={`inline-flex shrink-0 items-center gap-1.5 rounded-lg border px-3 py-1.5 text-xs font-semibold whitespace-nowrap transition-colors ${
+                        isDark
+                          ? 'border-slate-700 text-slate-200 hover:bg-slate-800'
+                          : 'border-slate-300 bg-white text-slate-800 hover:bg-slate-50'
+                      }`}
+                    >
+                      <BookOpen className="h-3.5 w-3.5" aria-hidden="true" />
+                      Panduan Setup API &amp; Firebase
+                    </button>
                   )}
-                </button>
+                </div>
               </div>
             </div>
 
@@ -855,7 +899,7 @@ export function ProviderSettingsDrawer({
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-xs font-bold">Perutean 3 Kunci API per Lantai &amp; Channel YouTube</h3>
                 <span className={`font-mono text-[10px] ${mutedText}`}>
-                  Settings &gt; Secrets
+                  Netlify Env / AI Studio Secrets
                 </span>
               </div>
               <p className={`mt-1 text-[11px] leading-relaxed ${mutedText}`}>

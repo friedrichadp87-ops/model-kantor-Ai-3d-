@@ -1,4 +1,4 @@
-import { useMemo } from 'react';
+import { useMemo, useState } from 'react';
 import {
   BUILDING_FLOORS,
   TOTAL_BUILDING_EMPLOYEES,
@@ -27,6 +27,7 @@ import type {
   ShortsDuration,
   ShortsQueueItem,
 } from '../office/shortsFactory';
+import type { MasterBibleSyncMode } from '../office/masterBible';
 import {
   getDivisionById,
   type PublicationSlot,
@@ -44,6 +45,7 @@ import { AgentRosterDrawer } from './AgentRosterDrawer';
 import { AgentTaskDrawer } from './AgentTaskDrawer';
 import { DivisionToolsDrawer, type DivisionToolMode } from './DivisionToolsDrawer';
 import { FirebaseAuthModal } from './FirebaseAuthModal';
+import { SetupGuideModal } from './SetupGuideModal';
 import { FloorDashboardDrawer } from './FloorDashboardDrawer';
 import { FloorWorkflowDrawer } from './FloorWorkflowDrawer';
 import { MediaStudioDrawer, type MediaStudioPrefill } from './MediaStudioDrawer';
@@ -53,7 +55,7 @@ import {
   type OrchestratorPrefill,
   type OrchestratorStageEvent,
 } from './ProductionOrchestratorDrawer';
-import { ProviderSettingsDrawer } from './ProviderSettingsDrawer';
+import { ProviderSettingsDrawer, type ProviderTab } from './ProviderSettingsDrawer';
 import {
   ShortsFactoryDrawer,
   type FactoryTab,
@@ -100,17 +102,22 @@ interface OfficeHUDProps {
   masterBible: LocalBibleDatabase | null;
   masterBibleBusy: boolean;
   masterBibleError: string | null;
+  masterBibleSyncMode: MasterBibleSyncMode;
+  masterBibleSyncNotice: string | null;
   orchestratorPrefill: OrchestratorPrefill | null;
   firebaseUser: FirebaseAuthUserSummary | null;
   firebaseAuthLoading: boolean;
   firebaseSyncStatus: FirestoreSyncStatus;
   firebaseModalOpen: boolean;
+  setupGuideOpen: boolean;
   onSelectFloorView: (view: FloorViewMode) => void;
   onSelectZone: (zone: OfficeZoneId) => void;
   onSelectDivision: (divisionId: WorkspaceDivisionId) => void;
   onToggleSidebar: () => void;
   onOpenFirebaseAuth: () => void;
   onCloseFirebaseAuth: () => void;
+  onOpenSetupGuide: () => void;
+  onCloseSetupGuide: (dontShowAgain: boolean) => void;
   onSyncFirebaseNow: () => Promise<void>;
   onSelectLighting: (preset: LightingPreset) => void;
   onSelectSpeed: (speed: number) => void;
@@ -223,17 +230,22 @@ export function OfficeHUD({
   masterBible,
   masterBibleBusy,
   masterBibleError,
+  masterBibleSyncMode,
+  masterBibleSyncNotice,
   orchestratorPrefill,
   firebaseUser,
   firebaseAuthLoading,
   firebaseSyncStatus,
   firebaseModalOpen,
+  setupGuideOpen,
   onSelectFloorView,
   onSelectZone,
   onSelectDivision,
   onToggleSidebar,
   onOpenFirebaseAuth,
   onCloseFirebaseAuth,
+  onOpenSetupGuide,
+  onCloseSetupGuide,
   onSyncFirebaseNow,
   onSelectLighting,
   onSelectSpeed,
@@ -277,6 +289,7 @@ export function OfficeHUD({
   onShortsProductionEvent,
   onHandoffToMediaStudio,
 }: OfficeHUDProps) {
+  const [providerInitialTab, setProviderInitialTab] = useState<ProviderTab>('ollama');
   const isDark = lighting === 'malam';
   const pwa = usePWA();
   const activeFloorSim = buildingState.floors[activeFloorId];
@@ -379,6 +392,10 @@ export function OfficeHUD({
               masterBible={masterBible}
               masterBibleBusy={masterBibleBusy}
               masterBibleError={masterBibleError}
+              masterBibleSyncMode={masterBibleSyncMode}
+              masterBibleSyncNotice={masterBibleSyncNotice}
+              firebaseSignedIn={Boolean(firebaseUser)}
+              onOpenFirebaseAuth={onOpenFirebaseAuth}
               onUploadMasterBibleFile={onUploadMasterBibleFile}
               onClearMasterBible={onClearMasterBible}
               onSelectFloorTab={onOpenFloorWorkflow}
@@ -436,14 +453,19 @@ export function OfficeHUD({
               <ProviderSettingsDrawer
                 lighting={lighting}
                 config={providerConfig}
+                initialTab={providerInitialTab}
                 firebaseUser={firebaseUser}
                 firebaseSyncStatus={firebaseSyncStatus}
                 onSaveConfig={onSaveProviderConfig}
                 onResetConfig={onResetProviderConfig}
                 onOpenChannelTemplates={onOpenChannelTemplates}
                 onOpenFirebaseAuth={onOpenFirebaseAuth}
+                onOpenSetupGuide={onOpenSetupGuide}
                 onVoiceSynthesisEvent={onVoiceSynthesisEvent}
-                onClose={onCloseProviderSettings}
+                onClose={() => {
+                  setProviderInitialTab('ollama');
+                  onCloseProviderSettings();
+                }}
               />
             )}
 
@@ -598,6 +620,18 @@ export function OfficeHUD({
         syncStatus={firebaseSyncStatus}
         onSyncNow={onSyncFirebaseNow}
         onClose={onCloseFirebaseAuth}
+      />
+
+      <SetupGuideModal
+        open={setupGuideOpen}
+        lighting={lighting}
+        firebaseUser={firebaseUser}
+        onOpenFirebaseAuth={onOpenFirebaseAuth}
+        onOpenProviderSettings={() => {
+          setProviderInitialTab('gemini');
+          onOpenProviderSettingsFromOrchestrator();
+        }}
+        onClose={onCloseSetupGuide}
       />
 
       <PWAStatusToast pwa={pwa} />

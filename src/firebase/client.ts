@@ -14,9 +14,11 @@ import {
 } from 'firebase/auth';
 import {
   collection,
+  deleteDoc,
   doc,
   getDoc,
   getDocFromServer,
+  getDocs,
   getFirestore,
   onSnapshot,
   serverTimestamp,
@@ -27,17 +29,22 @@ import { mergeProviderConfig, type ProviderConfig } from '../office/providerConf
 import {
   mergeChannelTemplates,
   type ChannelTemplatesMap,
+  type LocalBibleDatabase,
   type ShortsQueueItem,
 } from '../office/shortsFactory';
 import type { TaskEntry } from '../office/types';
 import {
   FIRESTORE_PATHS,
+  chunkMasterBibleForFirestore,
   isPermissionDeniedError,
+  reassembleMasterBibleFromFirestore,
   sanitizeAgentTaskPayload,
   sanitizeShortsQueueItemPayload,
   sanitizeUserProfilePayload,
   sanitizeWorkspaceSettingsPayload,
   type FirebaseAuthUserSummary,
+  type SanitizedMasterBibleChunkPayload,
+  type SanitizedMasterBibleMetaPayload,
 } from './officeSync';
 
 export const firebaseConfig = {
@@ -415,4 +422,123 @@ export function subscribeShortsQueue(
       });
     }
   );
+}
+
+export interface MasterBibleFirestoreLoadResult {
+  ok: boolean;
+  database: LocalBibleDatabase | null;
+  permissionDenied?: boolean;
+  path: string;
+  errorMessage?: string;
+}
+
+/**
+ * Persists the full Master Alkitab Terjemahan Baru into Cloud Firestore under:
+ *   users/{uid}/masterBible/meta
+ *   users/{uid}/masterBibleChunks/chunk_000 .. chunk_NNN (each <= 400 KB)
+ */
+export async function syncMasterBibleToFirestore(
+  uid: string,
+  database: LocalBibleDatabase
+): Promise<SyncWriteResult & { chunkCount?: number }> {
+  const metaPath = FIRESTORE_PATHS.masterBibleMetaDoc(uid);
+  const chunksColPath = FIRESTORE_PATHS.masterBibleChunksCollection(uid);
+  const chunked = chunkMasterBibleForFirestore(uid, database);
+
+  try {
+    // Write chunks in controlled parallel groups of 4 so large 66-book uploads stay fast & reliable
+    const batchConcurrency = 4;
+    for (let i = 0; i < chunked.chunks.length; i += batchConcurrency) {
+      const slice = chunked.chunks.slice(i, i + batchConcurrency);
+      await Promise.all(
+        slice.map(({ chunkId, payload }) =>
+          setDoc(doc(db, 'users', uid, 'masterBibleChunks', chunkId), payload)
+        )
+      );
+    }
+
+    // Remove any stale leftover chunk docs if replacing a larger Bible with a smaller one
+    const existingChunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
+    const validChunkIds = new Set(chunked.chunks.map((c) => c.chunkId));
+    const staleDocs = existingChunksSnap.docs.filter((d) => !validChunkIds.has(d.id));
+    if (staleDocs.length > 0) {
+      await Promise.all(staleDocs.map((d) => deleteDoc(d.ref)));
+    }
+
+    // Write metadata document last so readers always observe a complete chunk set
+    await setDoc(doc(db, 'users', uid, 'masterBible', 'meta'), chunked.meta);
+
+    return {
+      ok: true,
+      path: metaPath,
+      chunkCount: chunked.chunks.length,
+    };
+  } catch (error) {
+    const failedPath =
+      error instanceof Error && error.message.includes('masterBibleChunks')
+        ? chunksColPath
+        : metaPath;
+    const errInfo = buildFirestoreErrorInfo(error, OperationType.WRITE, failedPath);
+    console.warn('Firestore Master Bible Sync Notice:', JSON.stringify(errInfo));
+    return {
+      ok: false,
+      permissionDenied: isPermissionDeniedError(error),
+      path: failedPath,
+      errorMessage: errInfo.error,
+    };
+  }
+}
+
+export async function loadMasterBibleFromFirestore(
+  uid: string
+): Promise<MasterBibleFirestoreLoadResult> {
+  const metaPath = FIRESTORE_PATHS.masterBibleMetaDoc(uid);
+  try {
+    const metaSnap = await getDoc(doc(db, 'users', uid, 'masterBible', 'meta'));
+    if (!metaSnap.exists()) {
+      return { ok: true, database: null, path: metaPath };
+    }
+    const metaData = metaSnap.data() as Partial<SanitizedMasterBibleMetaPayload>;
+    const chunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
+    const chunks: Array<Partial<SanitizedMasterBibleChunkPayload>> = [];
+    chunksSnap.forEach((snap) => {
+      chunks.push(snap.data() as Partial<SanitizedMasterBibleChunkPayload>);
+    });
+
+    const database = reassembleMasterBibleFromFirestore(metaData, chunks);
+    return {
+      ok: true,
+      database,
+      path: metaPath,
+    };
+  } catch (error) {
+    const errInfo = buildFirestoreErrorInfo(error, OperationType.GET, metaPath);
+    console.warn('Firestore Master Bible Load Notice:', JSON.stringify(errInfo));
+    return {
+      ok: false,
+      database: null,
+      permissionDenied: isPermissionDeniedError(error),
+      path: metaPath,
+      errorMessage: errInfo.error,
+    };
+  }
+}
+
+export async function deleteMasterBibleFromFirestore(uid: string): Promise<SyncWriteResult> {
+  const metaPath = FIRESTORE_PATHS.masterBibleMetaDoc(uid);
+  try {
+    const chunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
+    await Promise.all(chunksSnap.docs.map((d) => deleteDoc(d.ref)));
+    await deleteDoc(doc(db, 'users', uid, 'masterBible', 'meta'));
+    return { ok: true, path: metaPath };
+  } catch (error) {
+    const errInfo = buildFirestoreErrorInfo(error, OperationType.DELETE, metaPath);
+    console.warn('Firestore Master Bible Delete Notice:', JSON.stringify(errInfo));
+    return {
+      ok: false,
+      permissionDenied: isPermissionDeniedError(error),
+      path: metaPath,
+      errorMessage: errInfo.error,
+    };
+  }
 }

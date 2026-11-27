@@ -13,6 +13,108 @@ export interface MasterBiblePolicyResult {
   masterActive: boolean;
 }
 
+export type MasterBibleSyncMode = 'firebase-synced' | 'server-synced' | 'local-only';
+
+export interface MasterBibleSyncOutcome {
+  mode: MasterBibleSyncMode;
+  notice: string | null;
+}
+
+export interface MasterBibleSyncResponseInput {
+  ok: boolean;
+  status: number;
+  contentType: string | null;
+  jsonBody?: { ok?: boolean; loaded?: boolean; error?: string } | null;
+  networkError?: boolean;
+}
+
+/**
+ * Classifies the response from POST /api/bible/master so static hosts (such as Netlify
+ * returning 404/405 or 200 text/html SPA fallback) or offline sessions gracefully keep
+ * the parsed Master Alkitab active in browser IndexedDB without showing a blocking error.
+ */
+export function classifyMasterBibleSyncResponse(
+  input: MasterBibleSyncResponseInput
+): MasterBibleSyncOutcome {
+  const ct = (input.contentType ?? '').toLowerCase();
+  const isJson = ct.includes('application/json');
+
+  if (!input.networkError && input.ok && isJson && input.jsonBody?.ok === true) {
+    return {
+      mode: 'server-synced',
+      notice: null,
+    };
+  }
+
+  if (input.status === 413) {
+    return {
+      mode: 'local-only',
+      notice:
+        'Alkitab aktif & tersimpan di browser (IndexedDB). Ukuran file melebihi batas pengiriman server saat ini.',
+    };
+  }
+
+  if (
+    input.networkError ||
+    !isJson ||
+    input.status === 404 ||
+    input.status === 405 ||
+    input.status === 502 ||
+    input.status === 503 ||
+    input.status === 504
+  ) {
+    return {
+      mode: 'local-only',
+      notice:
+        'Alkitab aktif & tersimpan di browser untuk L1–L3 (Mode Lokal/Netlify). Sinkronisasi server aktif otomatis saat terhubung ke backend.',
+    };
+  }
+
+  const detail =
+    typeof input.jsonBody?.error === 'string' && input.jsonBody.error.trim()
+      ? input.jsonBody.error.trim()
+      : `HTTP ${input.status}`;
+
+  return {
+    mode: 'local-only',
+    notice: `Alkitab tetap aktif di browser (IndexedDB). Sinkronisasi server tertunda (${detail}).`,
+  };
+}
+
+export async function syncMasterBibleToBackend(
+  database: LocalBibleDatabase
+): Promise<MasterBibleSyncOutcome> {
+  try {
+    const res = await fetch('/api/bible/master', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ database }),
+    });
+    const contentType = res.headers.get('content-type');
+    let jsonBody: { ok?: boolean; loaded?: boolean; error?: string } | null = null;
+    if (contentType && contentType.toLowerCase().includes('application/json')) {
+      jsonBody = (await res.json().catch(() => null)) as {
+        ok?: boolean;
+        loaded?: boolean;
+        error?: string;
+      } | null;
+    }
+    return classifyMasterBibleSyncResponse({
+      ok: res.ok,
+      status: res.status,
+      contentType,
+      jsonBody,
+    });
+  } catch {
+    return classifyMasterBibleSyncResponse({
+      ok: false,
+      status: 0,
+      contentType: null,
+      networkError: true,
+    });
+  }
+}
+
 export function formatDurationLabelId(seconds: number): string {
   const safe = Math.max(0, Math.round(seconds));
   if (safe < 60) {
@@ -84,9 +186,8 @@ export function parseMasterBibleContent(rawText: string, fileName = ''): LocalBi
       chaptersFound.add(`${book.id}:${chapter}`);
     };
 
-    if (Array.isArray(parsed)) {
-      // Variant 4: [{ name/book/kitab, chapters: [[verse1, verse2, ...]] }]
-      for (const item of parsed) {
+    const parseBookArray = (items: unknown[]) => {
+      for (const item of items) {
         if (!item || typeof item !== 'object') continue;
         const obj = item as Record<string, unknown>;
         const bookName = obj.name ?? obj.book_name ?? obj.book ?? obj.kitab ?? obj.abbrev;
@@ -128,11 +229,30 @@ export function parseMasterBibleContent(rawText: string, fileName = ''): LocalBi
           });
         }
       }
+    };
+
+    if (Array.isArray(parsed)) {
+      // Variant 4: [{ name/book/kitab, chapters: [[verse1, verse2, ...]] }]
+      parseBookArray(parsed);
     } else if (parsed && typeof parsed === 'object') {
       // Variant 3: { "Kejadian": { "1": { "1": "Pada mulanya..." } } } or { "Kejadian": [["..."]] }
+      // Also supports wrapper objects like { books: [...] } / { data: [...] } / { bible: [...] }
       const root = parsed as Record<string, unknown>;
+      const wrappedArray = Array.isArray(root.books)
+        ? root.books
+        : Array.isArray(root.data)
+        ? root.data
+        : Array.isArray(root.bible)
+        ? root.bible
+        : null;
+      if (wrappedArray) {
+        parseBookArray(wrappedArray);
+      }
+
       for (const [bookKey, bookVal] of Object.entries(root)) {
-        if (bookKey === 'metadata') continue;
+        if (bookKey === 'metadata' || bookKey === 'books' || bookKey === 'data' || bookKey === 'bible') {
+          continue;
+        }
         const book = resolveIndonesianBook(bookKey);
         if (!book || !bookVal || typeof bookVal !== 'object') continue;
 

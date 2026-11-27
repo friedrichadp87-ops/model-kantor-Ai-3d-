@@ -7,6 +7,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ClipboardList,
+  Cloud,
   Compass,
   ExternalLink,
   Eye,
@@ -39,7 +40,10 @@ import {
   type BibleSeriesPlanSummary,
 } from '../office/floor2And3Workflows';
 import { buildFloorWorkflowSnapshot } from '../office/floorWorkflowView';
-import { formatDurationLabelId } from '../office/masterBible';
+import {
+  formatDurationLabelId,
+  type MasterBibleSyncMode,
+} from '../office/masterBible';
 import {
   PROTESTANT_BIBLE_BOOKS,
   lookupLocalBibleReference,
@@ -74,6 +78,10 @@ interface FloorWorkflowDrawerProps {
   masterBible: LocalBibleDatabase | null;
   masterBibleBusy: boolean;
   masterBibleError: string | null;
+  masterBibleSyncMode?: MasterBibleSyncMode;
+  masterBibleSyncNotice?: string | null;
+  firebaseSignedIn?: boolean;
+  onOpenFirebaseAuth?: () => void;
   onUploadMasterBibleFile: (file: File) => Promise<void>;
   onClearMasterBible: () => Promise<void>;
   onSelectFloorTab: (floorId: FloorId) => void;
@@ -95,6 +103,10 @@ export function FloorWorkflowDrawer({
   masterBible,
   masterBibleBusy,
   masterBibleError,
+  masterBibleSyncMode = 'server-synced',
+  masterBibleSyncNotice = null,
+  firebaseSignedIn = false,
+  onOpenFirebaseAuth,
   onUploadMasterBibleFile,
   onClearMasterBible,
   onSelectFloorTab,
@@ -1180,18 +1192,53 @@ export function FloorWorkflowDrawer({
 
               {masterBible && (
                 <span
+                  data-testid="master-bible-sync-status"
                   className={`inline-flex items-center gap-1 text-[10.5px] font-semibold ${
                     isDark ? 'text-emerald-300' : 'text-emerald-700'
                   }`}
                 >
                   <CheckCircle2 className="h-3 w-3" aria-hidden="true" />
-                  <span>Tersinkron ke L1, L2 & L3</span>
+                  <span>
+                    {masterBibleSyncMode === 'firebase-synced'
+                      ? 'Tersimpan di Firebase Firestore (L1–L3)'
+                      : masterBibleSyncMode === 'local-only'
+                      ? 'Aktif di Browser L1–L3 (Mode Lokal/Netlify)'
+                      : 'Tersinkron ke L1, L2 & L3'}
+                  </span>
                 </span>
+              )}
+
+              {masterBible && masterBibleSyncMode !== 'firebase-synced' && onOpenFirebaseAuth && (
+                <button
+                  type="button"
+                  data-testid="save-master-bible-firebase-btn"
+                  onClick={onOpenFirebaseAuth}
+                  className={`inline-flex items-center gap-1 rounded-lg border px-2 py-1 text-[10.5px] font-semibold transition-colors ${
+                    isDark
+                      ? 'border-amber-500/50 bg-amber-500/15 text-amber-200 hover:bg-amber-500/25'
+                      : 'border-amber-300 bg-amber-50 text-amber-800 hover:bg-amber-100'
+                  }`}
+                >
+                  <Cloud className="h-3 w-3" aria-hidden="true" />
+                  <span>{firebaseSignedIn ? 'Sinkronkan Firebase' : 'Simpan ke Firebase'}</span>
+                </button>
               )}
             </div>
 
+            {masterBible && masterBibleSyncNotice && !masterBibleError && (
+              <p
+                data-testid="master-bible-sync-notice"
+                className={`mt-1.5 text-[10px] leading-snug ${mutedTextClass}`}
+              >
+                {masterBibleSyncNotice}
+              </p>
+            )}
+
             {masterBibleError && (
-              <p className="mt-1.5 text-[10.5px] font-medium text-rose-600 dark:text-rose-300">
+              <p
+                data-testid="master-bible-error"
+                className="mt-1.5 text-[10.5px] font-medium text-rose-600 dark:text-rose-300"
+              >
                 {masterBibleError}
               </p>
             )}

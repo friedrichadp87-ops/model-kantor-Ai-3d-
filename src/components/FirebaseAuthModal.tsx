@@ -27,6 +27,7 @@ import {
 } from '../firebase/client';
 import {
   FIRESTORE_PATHS,
+  MASTER_BIBLE_FIRESTORE_RULES_SNIPPET,
   formatFirebaseAuthError,
   type FirebaseAuthUserSummary,
 } from '../firebase/officeSync';
@@ -62,6 +63,7 @@ export function FirebaseAuthModal({
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
   const [successMsg, setSuccessMsg] = useState<string | null>(null);
   const [copiedHost, setCopiedHost] = useState(false);
+  const [copiedRules, setCopiedRules] = useState(false);
 
   const emailId = useId();
   const passwordId = useId();
@@ -152,6 +154,17 @@ export function FirebaseAuthModal({
       await navigator.clipboard.writeText(currentHost);
       setCopiedHost(true);
       setTimeout(() => setCopiedHost(false), 1800);
+    } catch {
+      // Ignore clipboard restrictions
+    }
+  };
+
+  const handleCopyRulesSnippet = async () => {
+    if (typeof navigator === 'undefined' || !navigator.clipboard) return;
+    try {
+      await navigator.clipboard.writeText(MASTER_BIBLE_FIRESTORE_RULES_SNIPPET);
+      setCopiedRules(true);
+      setTimeout(() => setCopiedRules(false), 1800);
     } catch {
       // Ignore clipboard restrictions
     }
@@ -368,7 +381,46 @@ export function FirebaseAuthModal({
                     <li className="truncate">{FIRESTORE_PATHS.workspaceSettingsDoc(user.uid)}</li>
                     <li className="truncate">{FIRESTORE_PATHS.shortsQueueCollection(user.uid)}</li>
                     <li className="truncate">{FIRESTORE_PATHS.agentTasksCollection(user.uid)}</li>
+                    <li className="truncate">{FIRESTORE_PATHS.masterBibleMetaDoc(user.uid)}</li>
+                    <li className="truncate">
+                      {FIRESTORE_PATHS.masterBibleChunksCollection(user.uid)}
+                    </li>
                   </ul>
+                </div>
+
+                {/* Copyable Firestore Rules snippet for Master Alkitab TB collections */}
+                <div
+                  className={`rounded-lg border p-2.5 text-[10.5px] ${
+                    isDark
+                      ? 'border-slate-700/80 bg-[#0a1322] text-slate-300'
+                      : 'border-slate-200 bg-slate-50 text-slate-700'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold">
+                      Aturan Firestore Rules (Master Alkitab TB)
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void handleCopyRulesSnippet()}
+                      className="inline-flex items-center gap-1 rounded border border-slate-300/60 px-2 py-0.5 text-[10px] font-medium hover:border-sky-500"
+                    >
+                      {copiedRules ? (
+                        <>
+                          <Check className="h-3 w-3 text-emerald-500" aria-hidden="true" />
+                          Tersalin
+                        </>
+                      ) : (
+                        <>
+                          <Copy className="h-3 w-3" aria-hidden="true" />
+                          Salin Rules
+                        </>
+                      )}
+                    </button>
+                  </div>
+                  <pre className="mt-1.5 overflow-x-auto whitespace-pre-wrap font-mono text-[10px] leading-relaxed opacity-90">
+                    {MASTER_BIBLE_FIRESTORE_RULES_SNIPPET}
+                  </pre>
                 </div>
               </div>
             </div>

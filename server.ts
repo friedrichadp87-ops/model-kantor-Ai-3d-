@@ -68,18 +68,19 @@ import {
   type BibleFactCategory,
   type BiblePlanScopeType,
 } from './src/office/floor2And3Workflows.ts';
+import { normalizeNetlifyApiPath } from './src/server/netlifyPath.ts';
+import { isValidEnvSecret, sanitizeEnvDefault } from './src/server/envSecrets.ts';
 
 const execFileAsync = promisify(execFile);
 
-const __filename = fileURLToPath(import.meta.url);
+const __filename =
+  typeof import.meta !== 'undefined' && typeof import.meta.url === 'string' && import.meta.url
+    ? fileURLToPath(import.meta.url)
+    : path.resolve(process.cwd(), 'server.ts');
 const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
-
-function isValidEnvSecret(value: string | undefined, placeholder: string): value is string {
-  return Boolean(value && value.trim() && value.trim() !== placeholder);
-}
 
 function resolveGeminiKeyForChannel(channelId?: ShortsChannelId): {
   apiKey: string;
@@ -99,14 +100,30 @@ function resolveGeminiKeyForChannel(channelId?: ShortsChannelId): {
   }
 
   const globalKey = process.env.GEMINI_API_KEY;
-  if (!isValidEnvSecret(globalKey, 'MY_GEMINI_API_KEY')) {
-    throw new Error('GEMINI_API_KEY belum dikonfigurasi pada server.');
+  if (isValidEnvSecret(globalKey, 'MY_GEMINI_API_KEY')) {
+    return {
+      apiKey: globalKey.trim(),
+      keySlotUsed: 'GEMINI_API_KEY',
+      source: 'fallback_global',
+    };
   }
-  return {
-    apiKey: globalKey.trim(),
-    keySlotUsed: 'GEMINI_API_KEY',
-    source: 'fallback_global',
-  };
+
+  // If no channelId was specified (e.g. generic health/test call), allow any valid dedicated floor key
+  if (!channelId) {
+    for (const floorId of FLOOR_ORDER) {
+      const slot = CHANNEL_KEY_ROUTING[BUILDING_FLOORS[floorId].channelId];
+      const dedicated = process.env[slot.geminiEnvVar];
+      if (isValidEnvSecret(dedicated, 'MY_GEMINI_API_KEY')) {
+        return {
+          apiKey: dedicated.trim(),
+          keySlotUsed: slot.geminiEnvVar,
+          source: 'dedicated',
+        };
+      }
+    }
+  }
+
+  throw new Error('GEMINI_API_KEY belum dikonfigurasi pada server.');
 }
 
 function resolveElevenLabsKeyForChannel(channelId?: ShortsChannelId): {
@@ -269,10 +286,19 @@ function mapGeminiApiError(err: unknown, fallbackLabel: string): { statusCode: n
   return { statusCode: 500, message: rawMessage };
 }
 
-async function startServer() {
+export function createApiApp(): express.Express {
   const app = express();
   const defaultJsonParser = express.json({ limit: '15mb' });
   let masterBibleStore: LocalBibleDatabase | null = null;
+
+  // Normalize Netlify Functions URL prefix (/.netlify/functions/api/...) so all /api/* routes match identically
+  app.use((req, _res, next) => {
+    const normalized = normalizeNetlifyApiPath(req.url);
+    if (normalized !== req.url) {
+      req.url = normalized;
+    }
+    next();
+  });
 
   app.use((req, res, next) => {
     if (req.path === '/api/pipeline/assemble-video' || req.path === '/api/bible/master') {
@@ -290,7 +316,7 @@ async function startServer() {
     });
   });
 
-  app.post('/api/bible/master', express.json({ limit: '25mb' }), (req, res) => {
+  app.post('/api/bible/master', express.json({ limit: '50mb' }), (req, res) => {
     const body = req.body as
       | {
           rawText?: string;
@@ -477,13 +503,23 @@ PERINTAH_PRODUKSI: <1 paragraf instruksi siap eksekusi untuk membuat renungan 2 
   });
 
   function isGeminiKeyConfigured(): boolean {
-    const k = process.env.GEMINI_API_KEY;
-    return Boolean(k && k.trim() && k !== 'MY_GEMINI_API_KEY');
+    if (isValidEnvSecret(process.env.GEMINI_API_KEY, 'MY_GEMINI_API_KEY')) {
+      return true;
+    }
+    return FLOOR_ORDER.some((floorId) => {
+      const slot = CHANNEL_KEY_ROUTING[BUILDING_FLOORS[floorId].channelId];
+      return isValidEnvSecret(process.env[slot.geminiEnvVar], 'MY_GEMINI_API_KEY');
+    });
   }
 
   function isElevenLabsKeyConfigured(): boolean {
-    const k = process.env.ELEVENLABS_API_KEY;
-    return Boolean(k && k.trim() && k !== 'MY_ELEVENLABS_API_KEY');
+    if (isValidEnvSecret(process.env.ELEVENLABS_API_KEY, 'MY_ELEVENLABS_API_KEY')) {
+      return true;
+    }
+    return FLOOR_ORDER.some((floorId) => {
+      const slot = CHANNEL_KEY_ROUTING[BUILDING_FLOORS[floorId].channelId];
+      return isValidEnvSecret(process.env[slot.elevenLabsEnvVar], 'MY_ELEVENLABS_API_KEY');
+    });
   }
 
   async function callOllamaChat(params: {
@@ -553,12 +589,12 @@ PERINTAH_PRODUKSI: <1 paragraf instruksi siap eksekusi untuk membuat renungan 2 
       },
       elevenlabs: {
         configured: isElevenLabsKeyConfigured(),
-        defaultVoiceId: process.env.ELEVENLABS_VOICE_ID?.trim() || '21m00Tcm4TlvDq8ikWAM',
-        defaultModelId: process.env.ELEVENLABS_MODEL_ID?.trim() || 'eleven_multilingual_v2',
+        defaultVoiceId: sanitizeEnvDefault(process.env.ELEVENLABS_VOICE_ID, '21m00Tcm4TlvDq8ikWAM'),
+        defaultModelId: sanitizeEnvDefault(process.env.ELEVENLABS_MODEL_ID, 'eleven_multilingual_v2'),
       },
       ollama: {
-        defaultBaseUrl: process.env.OLLAMA_BASE_URL?.trim() || 'http://127.0.0.1:11434',
-        defaultModel: process.env.OLLAMA_MODEL?.trim() || 'llama3.2',
+        defaultBaseUrl: sanitizeEnvDefault(process.env.OLLAMA_BASE_URL, 'http://127.0.0.1:11434'),
+        defaultModel: sanitizeEnvDefault(process.env.OLLAMA_MODEL, 'llama3.2'),
       },
       channelRouting: getChannelKeyRoutingStatus(),
       ffmpegAvailable,
@@ -3021,8 +3057,46 @@ Periksa 6 aspek wajib di array "checks":
     }
   });
 
+  // Ensure /api/* body-parser errors (e.g., 413 PayloadTooLargeError or malformed JSON) always return JSON
+  app.use(
+    (
+      err: { status?: number; type?: string; message?: string },
+      req: express.Request,
+      res: express.Response,
+      next: express.NextFunction
+    ) => {
+      if (!req.path.startsWith('/api/')) {
+        next(err);
+        return;
+      }
+      if (err?.type === 'entity.too.large' || err?.status === 413) {
+        res.status(413).json({
+          error: 'Ukuran file Master Alkitab melebihi batas pengiriman server (maks. 50 MB).',
+        });
+        return;
+      }
+      if (err?.status === 400) {
+        res.status(400).json({
+          error: 'Format JSON permintaan tidak valid.',
+        });
+        return;
+      }
+      res.status(err?.status ?? 500).json({
+        error: err?.message || 'Terjadi kendala pada server API.',
+      });
+    }
+  );
+
+  return app;
+}
+
+async function startServer() {
+  const app = createApiApp();
+
   if (!isProduction) {
-    const { createServer: createViteServer } = await import('vite');
+    // Dynamic specifier prevents Netlify's esbuild bundler from pulling Vite into the serverless function bundle
+    const vitePkg = 'vite';
+    const { createServer: createViteServer } = await import(vitePkg);
     const vite = await createViteServer({
       server: { middlewareMode: true, hmr: false, ws: false },
       appType: 'spa',
@@ -3103,7 +3177,18 @@ export class ErrorOverlay extends HTMLElement {}
   });
 }
 
-startServer().catch((err) => {
-  console.error('Failed to start Kantor AI 3D server:', err);
-  process.exit(1);
-});
+const isServerlessRuntime = Boolean(
+  process.env.NETLIFY || process.env.AWS_LAMBDA_FUNCTION_NAME
+);
+const isDirectMainExecution =
+  !isServerlessRuntime &&
+  typeof process !== 'undefined' &&
+  typeof process.argv?.[1] === 'string' &&
+  path.resolve(process.argv[1]) === path.resolve(__filename);
+
+if (isDirectMainExecution) {
+  startServer().catch((err) => {
+    console.error('Failed to start Kantor AI 3D server:', err);
+    process.exit(1);
+  });
+}

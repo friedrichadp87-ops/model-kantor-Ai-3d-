@@ -1,8 +1,19 @@
 import type { ProviderConfig } from '../office/providerConfig';
-import type { ChannelTemplatesMap, ShortsQueueItem } from '../office/shortsFactory';
+import type {
+  ChannelTemplatesMap,
+  LocalBibleDatabase,
+  ShortsQueueItem,
+} from '../office/shortsFactory';
 import type { AgentId, TaskEntry } from '../office/types';
 
 export const FIREBASE_PROJECT_ID = 'kantor-ai-agent-creator';
+
+export const MASTER_BIBLE_CHUNK_MAX_BYTES = 400_000;
+export const MASTER_BIBLE_CHUNK_MAX_VERSES = 2500;
+
+export function formatMasterBibleChunkId(chunkIndex: number): string {
+  return `chunk_${String(Math.max(0, Math.floor(chunkIndex))).padStart(3, '0')}`;
+}
 
 export const FIRESTORE_PATHS = {
   userDoc: (uid: string) => `users/${uid}`,
@@ -11,7 +22,18 @@ export const FIRESTORE_PATHS = {
   shortsQueueDoc: (uid: string, itemId: string) => `users/${uid}/shortsQueue/${itemId}`,
   agentTasksCollection: (uid: string) => `users/${uid}/agentTasks`,
   agentTaskDoc: (uid: string, taskId: string) => `users/${uid}/agentTasks/${taskId}`,
+  masterBibleMetaDoc: (uid: string) => `users/${uid}/masterBible/meta`,
+  masterBibleChunksCollection: (uid: string) => `users/${uid}/masterBibleChunks`,
+  masterBibleChunkDoc: (uid: string, chunkIndex: number) =>
+    `users/${uid}/masterBibleChunks/${formatMasterBibleChunkId(chunkIndex)}`,
 } as const;
+
+export const MASTER_BIBLE_FIRESTORE_RULES_SNIPPET = `match /users/{userId}/masterBible/{docId} {
+  allow read, write: if request.auth != null && request.auth.uid == userId;
+}
+match /users/{userId}/masterBibleChunks/{chunkId} {
+  allow read, write: if request.auth != null && request.auth.uid == userId;
+}`;
 
 export interface FirebaseAuthUserSummary {
   uid: string;
@@ -56,6 +78,37 @@ export interface SanitizedAgentTaskPayload {
   status: TaskEntry['status'];
   createdAt: string;
   completedAt: string;
+}
+
+export interface SanitizedMasterBibleMetaPayload {
+  ownerUid: string;
+  sourceName: string;
+  publisher: string;
+  year: string;
+  copyrightStatement: string;
+  indexedVerseCount: number;
+  bookCount: number;
+  chapterCount: number;
+  missingBookCount: number;
+  chunkCount: number;
+  updatedAt: string;
+}
+
+export interface SanitizedMasterBibleChunkPayload {
+  ownerUid: string;
+  chunkIndex: number;
+  chunkCount: number;
+  verseCount: number;
+  verses: Record<string, string>;
+  updatedAt: string;
+}
+
+export interface ChunkedMasterBiblePayload {
+  meta: SanitizedMasterBibleMetaPayload;
+  chunks: Array<{
+    chunkId: string;
+    payload: SanitizedMasterBibleChunkPayload;
+  }>;
 }
 
 function clampString(value: unknown, maxLen: number): string {
@@ -150,6 +203,149 @@ export function sanitizeAgentTaskPayload(
     status: entry.status,
     createdAt: clampString(entry.createdAt, 64),
     completedAt: clampString(entry.completedAt ?? '', 64),
+  };
+}
+
+function estimateUtf8Bytes(text: string): number {
+  if (typeof TextEncoder !== 'undefined') {
+    return new TextEncoder().encode(text).length;
+  }
+  return text.length * 2;
+}
+
+/**
+ * Splits a full Terjemahan Baru LocalBibleDatabase (~31,102 verses / ~4.5 MB) into
+ * deterministic, byte-bounded Firestore chunk documents (<= 400 KB each, safely under
+ * Firestore's 1 MiB per-document limit) plus a single metadata document.
+ */
+export function chunkMasterBibleForFirestore(
+  ownerUid: string,
+  db: LocalBibleDatabase,
+  options?: {
+    maxBytesPerChunk?: number;
+    maxVersesPerChunk?: number;
+    nowIso?: string;
+  }
+): ChunkedMasterBiblePayload {
+  const safeUid = clampString(ownerUid, 128);
+  const nowIso = clampString(options?.nowIso ?? new Date().toISOString(), 64);
+  const maxBytes = Math.max(8_192, options?.maxBytesPerChunk ?? MASTER_BIBLE_CHUNK_MAX_BYTES);
+  const maxVerses = Math.max(50, options?.maxVersesPerChunk ?? MASTER_BIBLE_CHUNK_MAX_VERSES);
+
+  const entries = Object.entries(db.versesMap).sort(([a], [b]) => a.localeCompare(b));
+  const rawChunks: Array<Record<string, string>> = [];
+  let currentMap: Record<string, string> = {};
+  let currentBytes = 256;
+  let currentCount = 0;
+
+  for (const [key, value] of entries) {
+    const cleanKey = clampString(key, 64);
+    const cleanVal = clampString(value, 4000);
+    if (!cleanKey || !cleanVal) continue;
+    const entryBytes = estimateUtf8Bytes(cleanKey) + estimateUtf8Bytes(cleanVal) + 16;
+
+    if (
+      currentCount > 0 &&
+      (currentBytes + entryBytes > maxBytes || currentCount >= maxVerses)
+    ) {
+      rawChunks.push(currentMap);
+      currentMap = {};
+      currentBytes = 256;
+      currentCount = 0;
+    }
+
+    currentMap[cleanKey] = cleanVal;
+    currentBytes += entryBytes;
+    currentCount += 1;
+  }
+
+  if (currentCount > 0) {
+    rawChunks.push(currentMap);
+  }
+
+  const chunkCount = rawChunks.length;
+  const chunks = rawChunks.map((verses, chunkIndex) => ({
+    chunkId: formatMasterBibleChunkId(chunkIndex),
+    payload: {
+      ownerUid: safeUid,
+      chunkIndex,
+      chunkCount,
+      verseCount: Object.keys(verses).length,
+      verses,
+      updatedAt: nowIso,
+    },
+  }));
+
+  const indexedVerseCount = chunks.reduce((sum, item) => sum + item.payload.verseCount, 0);
+
+  return {
+    meta: {
+      ownerUid: safeUid,
+      sourceName: clampString(db.report.sourceName || 'Alkitab Terjemahan Baru (TB)', 200),
+      publisher: clampString(
+        db.report.publisher || 'Lembaga Alkitab Indonesia (LAI) — Unggahan Pemilik Studio',
+        200
+      ),
+      year: clampString(db.report.year || 'TB', 40),
+      copyrightStatement: clampString(
+        db.report.copyrightStatement ||
+          'Sumber utama internal Kantor AI 3D (Lantai 1, 2 & 3) untuk verifikasi teks Alkitab lokal.',
+        500
+      ),
+      indexedVerseCount,
+      bookCount: Math.max(0, Math.floor(Number(db.report.bookCount) || 0)),
+      chapterCount: Math.max(0, Math.floor(Number(db.report.chapterCount) || 0)),
+      missingBookCount: Math.max(0, Math.floor(Number(db.report.missingBookCount) || 0)),
+      chunkCount,
+      updatedAt: nowIso,
+    },
+    chunks,
+  };
+}
+
+export function reassembleMasterBibleFromFirestore(
+  meta: Partial<SanitizedMasterBibleMetaPayload> | null | undefined,
+  chunks: Array<Partial<SanitizedMasterBibleChunkPayload>>
+): LocalBibleDatabase | null {
+  if (!meta || !Array.isArray(chunks) || chunks.length === 0) {
+    return null;
+  }
+
+  const ordered = [...chunks].sort(
+    (a, b) => Number(a.chunkIndex ?? 0) - Number(b.chunkIndex ?? 0)
+  );
+  const versesMap: Record<string, string> = {};
+  for (const chunk of ordered) {
+    if (!chunk.verses || typeof chunk.verses !== 'object') continue;
+    for (const [k, v] of Object.entries(chunk.verses)) {
+      if (typeof v === 'string' && v.trim()) {
+        versesMap[k] = v;
+      }
+    }
+  }
+
+  const indexedVerseCount = Object.keys(versesMap).length;
+  if (indexedVerseCount === 0) {
+    return null;
+  }
+
+  return {
+    versesMap,
+    report: {
+      indexedVerseCount,
+      bookCount: Math.max(0, Math.floor(Number(meta.bookCount) || 0)),
+      chapterCount: Math.max(0, Math.floor(Number(meta.chapterCount) || 0)),
+      missingBookCount: Math.max(0, Math.floor(Number(meta.missingBookCount) || 0)),
+      sourceName: String(meta.sourceName || 'Alkitab Terjemahan Baru (Firebase Cloud)'),
+      publisher: String(
+        meta.publisher || 'Lembaga Alkitab Indonesia (LAI) — Tersimpan di Firebase Firestore'
+      ),
+      year: String(meta.year || 'TB'),
+      copyrightStatement: String(
+        meta.copyrightStatement ||
+          'Sumber utama internal Kantor AI 3D (Lantai 1, 2 & 3) yang tersinkron di Cloud Firestore.'
+      ),
+    },
   };
 }
 
