@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { OfficeHUD } from './components/OfficeHUD';
+import { clearApiMasterBibleCache, setApiMasterBibleCache } from './firebase/apiFetch';
 import { OfficeViewport, type OfficeViewportHandle } from './components/OfficeViewport';
 import type { MediaStudioPrefill } from './components/MediaStudioDrawer';
 import type { DivisionToolMode } from './components/DivisionToolsDrawer';
@@ -68,7 +69,6 @@ import {
 import {
   buildMasterBibleSystemPolicy,
   parseMasterBibleContent,
-  syncMasterBibleToBackend,
   type MasterBibleSyncMode,
 } from './office/masterBible';
 import {
@@ -268,10 +268,11 @@ export default function App() {
     void loadMasterBibleFromIndexedDb().then(async (saved) => {
       if (!active || !saved) return;
       setMasterBible(saved);
-      const outcome = await syncMasterBibleToBackend(saved);
       if (!active) return;
-      setMasterBibleSyncMode(outcome.mode);
-      setMasterBibleSyncNotice(outcome.notice);
+      setMasterBibleSyncMode('local-only');
+      setMasterBibleSyncNotice(
+        'Master Alkitab ditemukan di penyimpanan lokal. Masuk ke Firebase untuk memeriksa dan menyinkronkan sumber utama Firestore.'
+      );
       setActivityLog((prev) =>
         appendActivityLog(prev, [
           createStudioActivityEntry(
@@ -402,7 +403,7 @@ export default function App() {
         setMasterBible(cloudBible);
         setMasterBibleSyncMode('firebase-synced');
         setMasterBibleSyncNotice(null);
-        void syncMasterBibleToBackend(cloudBible);
+        setApiMasterBibleCache(uid, cloudBible);
         setActivityLog((prev) =>
           appendActivityLog(prev, [
             createStudioActivityEntry(
@@ -419,6 +420,7 @@ export default function App() {
       const pushRes = await syncMasterBibleToFirestore(uid, localBible);
       if (!bibleSyncActive) return;
       if (pushRes.ok) {
+        setApiMasterBibleCache(uid, localBible);
         setMasterBibleSyncMode('firebase-synced');
         setMasterBibleSyncNotice(
           `Tersimpan di Firebase Firestore (${pushRes.chunkCount ?? 1} bagian) — otomatis sinkron di PC, Android & Netlify.`
@@ -949,8 +951,9 @@ export default function App() {
         const parsed = parseMasterBibleContent(rawText, file.name);
         await saveMasterBibleToIndexedDb(parsed);
 
-        // Activate immediately in browser state across L1, L2 & L3
+        // Activate the one building-wide Master Bible for every floor and API request.
         setMasterBible(parsed);
+        if (firebaseUser) setApiMasterBibleCache(firebaseUser.uid, parsed);
 
         // 1. Primary cloud persistence: save chunked Master Alkitab directly to Firebase Firestore when signed in
         let savedToFirebase = false;
@@ -968,19 +971,14 @@ export default function App() {
           }
         }
 
-        // 2. Non-blocking backend memory sync (for local/Cloud Run server AI agents)
-        const backendOutcome = await syncMasterBibleToBackend(parsed);
-
         if (savedToFirebase) {
           setMasterBibleSyncMode('firebase-synced');
           setMasterBibleSyncNotice(firebaseNotice);
         } else {
-          setMasterBibleSyncMode(backendOutcome.mode);
+          setMasterBibleSyncMode('local-only');
           setMasterBibleSyncNotice(
             firebaseNotice ??
-              (firebaseUser
-                ? backendOutcome.notice
-                : 'Alkitab aktif di browser (IndexedDB). Masuk ke akun Firebase agar Alkitab otomatis tersimpan di Cloud Firestore.')
+              'Alkitab aktif pada perangkat ini (IndexedDB). Masuk ke akun Firebase agar Master Alkitab tersimpan permanen di Firestore.'
           );
         }
 
@@ -1011,7 +1009,7 @@ export default function App() {
       if (firebaseUser) {
         await deleteMasterBibleFromFirestore(firebaseUser.uid).catch(() => undefined);
       }
-      await fetch('/api/bible/master', { method: 'DELETE' }).catch(() => undefined);
+      clearApiMasterBibleCache();
       setMasterBible(null);
       setMasterBibleSyncMode('server-synced');
       setActivityLog((prev) =>
