@@ -42,6 +42,7 @@ import {
   type PipelineYoutubeMetadata,
   type SceneAnimationMode,
 } from '../office/productionPipeline';
+import { clearActiveApiWorkContext, setActiveApiWorkContext } from '../firebase/apiFetch';
 import type { AvSyncCheckReport } from '../office/floor2And3Workflows';
 import type { ProviderConfig, ServerProviderStatus } from '../office/providerConfig';
 import {
@@ -56,6 +57,7 @@ import { getFloorByChannelId } from '../office/buildingFloors';
 import type { AgentId, LightingPreset } from '../office/types';
 
 export interface OrchestratorStageEvent {
+  runId?: string;
   channelId: ShortsChannelId;
   agentId: AgentId;
   stageId: PipelineStageId;
@@ -181,6 +183,7 @@ export function ProductionOrchestratorDrawer({
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
 
   const commandInputId = useId();
   const scopeInputId = useId();
@@ -269,6 +272,7 @@ export function ProductionOrchestratorDrawer({
     const stageDef = bp.stages.find((s) => s.id === stageId);
     if (!stageDef) return;
     onStageEvent({
+      runId: activeRunIdRef.current ?? undefined,
       channelId: bp.channelId,
       agentId: stageDef.leadAgentId,
       stageId,
@@ -327,6 +331,8 @@ export function ProductionOrchestratorDrawer({
       srtText: '',
     };
 
+    activeRunIdRef.current = initialRun.id;
+    setActiveApiWorkContext(initialRun.id, input.channelId);
     setRunState(initialRun);
     setRunning(true);
 
@@ -843,6 +849,7 @@ export function ProductionOrchestratorDrawer({
         runStageEvent(bp, 'final_qc', 'error', msg);
       }
     } finally {
+      clearActiveApiWorkContext(initialRun.id);
       setRunning(false);
     }
   };

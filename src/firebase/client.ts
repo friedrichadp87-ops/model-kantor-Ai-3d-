@@ -21,6 +21,9 @@ import {
   getDocs,
   getFirestore,
   onSnapshot,
+  orderBy,
+  query,
+  limit,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -45,6 +48,9 @@ import {
   type FirebaseAuthUserSummary,
   type SanitizedMasterBibleChunkPayload,
   type SanitizedMasterBibleMetaPayload,
+  sanitizeWorkHistoryRecord,
+  selectMasterBibleChunksForUpload,
+  type WorkHistoryRecord,
 } from './officeSync';
 
 export const firebaseConfig = {
@@ -424,6 +430,63 @@ export function subscribeShortsQueue(
   );
 }
 
+
+export interface WorkHistoryWriteResult extends SyncWriteResult {}
+
+export async function appendWorkHistoryToFirestore(
+  uid: string,
+  record: Omit<WorkHistoryRecord, 'ownerUid'>
+): Promise<WorkHistoryWriteResult> {
+  const payload = sanitizeWorkHistoryRecord(uid, record);
+  const path = `users/${uid}/workHistory/${payload.id}`;
+  try {
+    // Immutable event document: each start/completion/error is a separate append-only record.
+    await setDoc(doc(db, 'users', uid, 'workHistory', payload.id), payload);
+    return { ok: true, path };
+  } catch (error) {
+    const info = buildFirestoreErrorInfo(error, OperationType.WRITE, path);
+    console.warn('Firestore Work History Write Notice:', JSON.stringify(info));
+    return {
+      ok: false,
+      permissionDenied: isPermissionDeniedError(error),
+      path,
+      errorMessage: info.error,
+    };
+  }
+}
+
+export function subscribeWorkHistory(
+  uid: string,
+  onRecords: (records: WorkHistoryRecord[]) => void,
+  onError: (info: { permissionDenied: boolean; path: string; message: string }) => void
+): Unsubscribe {
+  const path = `users/${uid}/workHistory`;
+  const historyQuery = query(
+    collection(db, 'users', uid, 'workHistory'),
+    orderBy('createdAt', 'desc'),
+    limit(500)
+  );
+  return onSnapshot(
+    historyQuery,
+    (snapshot) => {
+      const records = snapshot.docs.map((item) => ({
+        ...(item.data() as WorkHistoryRecord),
+        id: item.id,
+      }));
+      onRecords(records);
+    },
+    (error) => {
+      const info = buildFirestoreErrorInfo(error, OperationType.LIST, path);
+      console.warn('Firestore Work History Subscription Notice:', JSON.stringify(info));
+      onError({
+        permissionDenied: isPermissionDeniedError(error),
+        path,
+        message: info.error,
+      });
+    }
+  );
+}
+
 export interface MasterBibleFirestoreLoadResult {
   ok: boolean;
   database: LocalBibleDatabase | null;
@@ -444,29 +507,49 @@ export async function syncMasterBibleToFirestore(
   const metaPath = FIRESTORE_PATHS.masterBibleMetaDoc(uid);
   const chunksColPath = FIRESTORE_PATHS.masterBibleChunksCollection(uid);
   const chunked = chunkMasterBibleForFirestore(uid, database);
+  const uploadId = `bible_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  const versionedChunks = chunked.chunks.map(({ chunkId, payload }) => ({
+    documentId: `${uploadId}_${chunkId}`,
+    payload: { ...payload, uploadId },
+  }));
 
   try {
-    // Write chunks in controlled parallel groups of 4 so large 66-book uploads stay fast & reliable
+    // Write versioned chunks first. The currently published metadata still points
+    // to the previous complete upload while a replacement is being prepared.
     const batchConcurrency = 4;
-    for (let i = 0; i < chunked.chunks.length; i += batchConcurrency) {
-      const slice = chunked.chunks.slice(i, i + batchConcurrency);
+    for (let i = 0; i < versionedChunks.length; i += batchConcurrency) {
+      const slice = versionedChunks.slice(i, i + batchConcurrency);
       await Promise.all(
-        slice.map(({ chunkId, payload }) =>
-          setDoc(doc(db, 'users', uid, 'masterBibleChunks', chunkId), payload)
+        slice.map(({ documentId, payload }) =>
+          setDoc(doc(db, 'users', uid, 'masterBibleChunks', documentId), payload)
         )
       );
     }
 
-    // Remove any stale leftover chunk docs if replacing a larger Bible with a smaller one
-    const existingChunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
-    const validChunkIds = new Set(chunked.chunks.map((c) => c.chunkId));
-    const staleDocs = existingChunksSnap.docs.filter((d) => !validChunkIds.has(d.id));
-    if (staleDocs.length > 0) {
-      await Promise.all(staleDocs.map((d) => deleteDoc(d.ref)));
-    }
+    // Atomically publish the new version only after every chunk has been written.
+    await setDoc(doc(db, 'users', uid, 'masterBible', 'meta'), {
+      ...chunked.meta,
+      uploadId,
+    });
 
-    // Write metadata document last so readers always observe a complete chunk set
-    await setDoc(doc(db, 'users', uid, 'masterBible', 'meta'), chunked.meta);
+    // Old versions are no longer referenced. Clean them up after publication;
+    // cleanup failure is harmless because readers filter by the active uploadId.
+    try {
+      const existingChunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
+      const orphanCutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const staleDocs = existingChunksSnap.docs.filter((item) => {
+        const data = item.data();
+        if (data.uploadId === uploadId) return false;
+        const updatedAt = Date.parse(String(data.updatedAt ?? ''));
+        // Keep recent versions because another device may still be uploading them.
+        return Number.isFinite(updatedAt) && updatedAt < orphanCutoff;
+      });
+      if (staleDocs.length > 0) {
+        await Promise.all(staleDocs.map((item) => deleteDoc(item.ref)));
+      }
+    } catch (cleanupError) {
+      console.warn('Firestore Master Bible old-version cleanup deferred:', cleanupError);
+    }
 
     return {
       ok: true,
@@ -500,11 +583,11 @@ export async function loadMasterBibleFromFirestore(
     }
     const metaData = metaSnap.data() as Partial<SanitizedMasterBibleMetaPayload>;
     const chunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
-    const chunks: Array<Partial<SanitizedMasterBibleChunkPayload>> = [];
+    const allChunks: Array<Partial<SanitizedMasterBibleChunkPayload>> = [];
     chunksSnap.forEach((snap) => {
-      chunks.push(snap.data() as Partial<SanitizedMasterBibleChunkPayload>);
+      allChunks.push(snap.data() as Partial<SanitizedMasterBibleChunkPayload>);
     });
-
+    const chunks = selectMasterBibleChunksForUpload(metaData, allChunks);
     const database = reassembleMasterBibleFromFirestore(metaData, chunks);
     return {
       ok: true,
@@ -522,6 +605,50 @@ export async function loadMasterBibleFromFirestore(
       errorMessage: errInfo.error,
     };
   }
+}
+
+export function subscribeMasterBible(
+  uid: string,
+  onDatabase: (database: LocalBibleDatabase | null) => void,
+  onError: (info: { permissionDenied: boolean; path: string; message: string }) => void
+): Unsubscribe {
+  const path = FIRESTORE_PATHS.masterBibleMetaDoc(uid);
+  return onSnapshot(
+    doc(db, 'users', uid, 'masterBible', 'meta'),
+    async (metaSnapshot) => {
+      if (!metaSnapshot.exists()) {
+        onDatabase(null);
+        return;
+      }
+      try {
+        const result = await loadMasterBibleFromFirestore(uid);
+        if (result.ok) onDatabase(result.database);
+        else {
+          onError({
+            permissionDenied: Boolean(result.permissionDenied),
+            path: result.path,
+            message: result.errorMessage ?? 'Master Alkitab Firestore gagal dimuat.',
+          });
+        }
+      } catch (error) {
+        const info = buildFirestoreErrorInfo(error, OperationType.GET, path);
+        onError({
+          permissionDenied: isPermissionDeniedError(error),
+          path,
+          message: info.error,
+        });
+      }
+    },
+    (error) => {
+      const info = buildFirestoreErrorInfo(error, OperationType.GET, path);
+      console.warn('Firestore Master Bible Subscription Notice:', JSON.stringify(info));
+      onError({
+        permissionDenied: isPermissionDeniedError(error),
+        path,
+        message: info.error,
+      });
+    }
+  );
 }
 
 export async function deleteMasterBibleFromFirestore(uid: string): Promise<SyncWriteResult> {

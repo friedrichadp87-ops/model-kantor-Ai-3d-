@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { normalizeNetlifyApiPath } from './netlifyPath';
-import { handler as netlifyApiHandler } from '../../netlify/functions/api';
+import { createNetlifyApiHandler } from '../../netlify/functions/api';
 
 test('normalizeNetlifyApiPath cleanly normalizes Netlify Function prefixes and preserves query strings', () => {
   assert.equal(
@@ -22,12 +22,26 @@ test('normalizeNetlifyApiPath cleanly normalizes Netlify Function prefixes and p
   );
 });
 
-test('Netlify Function handler executes Express /api/providers/status and returns valid JSON', async () => {
-  const response = (await netlifyApiHandler(
+test('Netlify Function handler executes Express /api/providers/status for a verified owner', async () => {
+  const handler = createNetlifyApiHandler({
+    verifyToken: async () => ({
+      aud: 'kantor-ai-agent-creator',
+      auth_time: 1,
+      exp: 4_102_444_800,
+      iat: 1,
+      iss: 'https://securetoken.google.com/kantor-ai-agent-creator',
+      sub: 'test-owner',
+    }),
+    isUidAllowed: (uid) => uid === 'test-owner',
+  });
+  const response = (await handler(
     {
       httpMethod: 'GET',
       path: '/.netlify/functions/api/api/providers/status',
-      headers: { host: 'officecontent.netlify.app' },
+      headers: {
+        host: 'officecontent.netlify.app',
+        authorization: 'Bearer test.firebase.token',
+      },
       queryStringParameters: {},
       body: null,
       isBase64Encoded: false,
