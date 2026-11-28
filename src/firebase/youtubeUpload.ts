@@ -68,7 +68,6 @@ export async function uploadVideoToYoutube(options: YoutubeUploadOptions): Promi
     headers: {
       Authorization: `Bearer ${tokenData.accessToken}`,
       'Content-Type': videoBlob.type || 'video/mp4',
-      'Content-Length': String(videoBlob.size),
     },
     body: videoBlob,
   });
