@@ -59,7 +59,7 @@ Jika aplikasi utama sudah memiliki middleware CORS, pastikan ia membatasi origin
 
 ## 6. Pengaturan di Kantor AI 3D
 Buka **Pengaturan → Suara & TTS**:
-1. Pilih **Edge-TTS (Gratis via Windows Worker)**.
+1. Edge-TTS sudah menjadi provider default. Pilih **Edge-TTS (Gratis via Windows Worker)** bila ingin memastikan pilihan provider tersebut aktif. ElevenLabs tetap tersedia sebagai provider alternatif dan tidak digunakan selama Edge-TTS dipilih.
 2. Masukkan `http://127.0.0.1:8765`.
 3. Pilih suara, Rate, dan Pitch.
 4. Simpan pengaturan. Nilainya ikut tersimpan dalam dokumen workspace Firestore yang sudah digunakan.
@@ -98,3 +98,8 @@ GET `/health` mengembalikan status proses Worker tanpa menampilkan kredensial.
 ## Catatan pemeriksaan source
 
 File UI TypeScript dan Worker Python berada pada branch fitur terpisah. Sebelum penggunaan produksi, jalankan pemeriksaan TypeScript, unit test, dan build dari repo; lalu lakukan tes langsung pada Windows Worker dengan token Firebase pemilik. Hasil CI source tidak menggantikan uji suara nyata.
+
+
+## Provider suara yang menjadi prioritas
+
+Edge-TTS adalah provider default untuk pengaturan baru dan konfigurasi lama yang belum pernah menyimpan pilihan provider. Selama Edge-TTS dipilih, alur produksi akan mengirim naskah ke Windows Worker secara otomatis dan memakai hasil MP3 untuk proses penggabungan video. ElevenLabs tetap dipertahankan sebagai pilihan alternatif; pilih secara eksplisit hanya saat ingin menggunakannya.
