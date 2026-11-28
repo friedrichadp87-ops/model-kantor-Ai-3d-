@@ -45,6 +45,7 @@ import {
 import { clearActiveApiWorkContext, setActiveApiWorkContext } from '../firebase/apiFetch';
 import type { AvSyncCheckReport } from '../office/floor2And3Workflows';
 import type { ProviderConfig, ServerProviderStatus } from '../office/providerConfig';
+import { buildEdgeTtsPayload, generateEdgeTtsAudio } from '../office/edgeTtsClient';
 import {
   YOUTUBE_CHANNELS,
   getChannelById,
@@ -181,6 +182,8 @@ export function ProductionOrchestratorDrawer({
   const [running, setRunning] = useState<boolean>(false);
   const [sceneBusyKey, setSceneBusyKey] = useState<string | null>(null);
   const [runState, setRunState] = useState<PipelineRunState | null>(null);
+  const [edgeTtsBusy, setEdgeTtsBusy] = useState(false);
+  const [edgeTtsError, setEdgeTtsError] = useState<string | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [youtubeUploadBusy, setYoutubeUploadBusy] = useState(false);
   const [youtubeUploadResult, setYoutubeUploadResult] = useState<YoutubeUploadResult | null>(null);
@@ -285,6 +288,51 @@ export function ProductionOrchestratorDrawer({
       phase,
       detail,
     });
+  };
+
+  const handleGenerateEdgeTtsNarration = async () => {
+    if (!runState?.scriptArc?.fullNarrationScript.trim()) {
+      setEdgeTtsError('Naskah narasi belum tersedia.');
+      return;
+    }
+
+    setEdgeTtsBusy(true);
+    setEdgeTtsError(null);
+    activeRunIdRef.current = runState.id;
+    const bp = getChannelWorkflowBlueprint(runState.input.channelId);
+    updateStage('narration_audio', 'running', 'Membuat audio narasi menggunakan Edge-TTS melalui Windows Worker...');
+    runStageEvent(bp, 'narration_audio', 'start', 'Edge-TTS Windows Worker');
+
+    try {
+      const settings = providerConfig.edgeTts;
+      const payload = buildEdgeTtsPayload(
+        runState.id,
+        settings.voice,
+        settings.rate,
+        settings.pitch,
+        [{
+          role: 'narator',
+          voice: settings.voice,
+          text: runState.scriptArc.fullNarrationScript,
+          pauseMs: 0,
+        }]
+      );
+      const result = await generateEdgeTtsAudio(settings.workerUrl, payload);
+      setRunState((prev) => prev ? {
+        ...prev,
+        narrationAudioDataUrl: result.dataUrl,
+        narrationAudioNote: `Edge-TTS selesai · ${result.segmentCount} segmen · ${result.characterCount ?? 0} karakter`,
+      } : prev);
+      updateStage('narration_audio', 'completed', 'Audio narasi Edge-TTS selesai dan siap dipasang ke proyek video.');
+      runStageEvent(bp, 'narration_audio', 'done', 'Edge-TTS menghasilkan MP3');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gagal membuat audio Edge-TTS.';
+      setEdgeTtsError(message);
+      updateStage('narration_audio', 'error', message);
+      runStageEvent(bp, 'narration_audio', 'error', message);
+    } finally {
+      setEdgeTtsBusy(false);
+    }
   };
 
   const handleStopRun = () => {
@@ -613,6 +661,30 @@ export function ProductionOrchestratorDrawer({
         updateStage('narration_audio', 'running', 'Mensintesis suara narasi ElevenLabs...');
         runStageEvent(bp, 'narration_audio', 'start');
         try {
+          if (providerConfig.voiceProvider === 'edge-tts') {
+            const settings = providerConfig.edgeTts;
+            const payload = buildEdgeTtsPayload(
+              activeRunIdRef.current ?? `edge-${Date.now()}`,
+              settings.voice,
+              settings.rate,
+              settings.pitch,
+              [{
+                role: 'narator',
+                voice: settings.voice,
+                text: workingScriptArc.fullNarrationScript,
+                pauseMs: 0,
+              }]
+            );
+            const edgeAudio = await generateEdgeTtsAudio(settings.workerUrl, payload);
+            narrationAudioDataUrl = edgeAudio.dataUrl;
+            setRunState((prev) => prev ? {
+              ...prev,
+              narrationAudioDataUrl: edgeAudio.dataUrl,
+              narrationAudioNote: `Edge-TTS selesai (${edgeAudio.segmentCount} segmen)`,
+            } : prev);
+            updateStage('narration_audio', 'completed', 'Narasi MP3 selesai melalui Edge-TTS Windows Worker.');
+            runStageEvent(bp, 'narration_audio', 'done', 'Edge-TTS Windows Worker');
+          } else {
           const audioRes = await fetch('/api/pipeline/narration-audio', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -655,6 +727,7 @@ export function ProductionOrchestratorDrawer({
             setRunState((prev) => (prev ? { ...prev, narrationAudioNote: note } : prev));
             updateStage('narration_audio', 'warning', note);
             runStageEvent(bp, 'narration_audio', 'done');
+          }
           }
         } catch {
           if (controller.signal.aborted) return;
@@ -1609,6 +1682,20 @@ export function ProductionOrchestratorDrawer({
                       <p className={`mt-1 whitespace-pre-line ${mutedText}`}>
                         {runState.scriptArc.fullNarrationScript}
                       </p>
+                      {providerConfig.voiceProvider === 'edge-tts' && (
+                        <div className="mt-3 space-y-2">
+                          <button
+                            type="button"
+                            onClick={() => void handleGenerateEdgeTtsNarration()}
+                            disabled={edgeTtsBusy || running}
+                            className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-60 ${isDark ? 'bg-sky-600 hover:bg-sky-500' : 'bg-slate-900 hover:bg-slate-800'}`}
+                          >
+                            {edgeTtsBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Volume2 className="h-3.5 w-3.5" />}
+                            {edgeTtsBusy ? 'Membuat audio narasi...' : 'Buat Audio Narasi (Edge-TTS)'}
+                          </button>
+                          {edgeTtsError && <p role="alert" className="text-[11px] text-rose-500">{edgeTtsError}</p>}
+                        </div>
+                      )}
                     </div>
                   )}
 
@@ -1618,7 +1705,26 @@ export function ProductionOrchestratorDrawer({
                         <Volume2 className="h-3.5 w-3.5 text-sky-500" aria-hidden="true" />
                         Audio Narasi · {runState.narrationAudioNote}
                       </p>
-                      <audio controls src={runState.narrationAudioDataUrl} className="h-9 w-full" />
+                      <div className="flex flex-wrap items-center gap-2">
+                        <audio controls src={runState.narrationAudioDataUrl} className="h-9 min-w-0 flex-1" />
+                        <button
+                          type="button"
+                          onClick={() => downloadBlobUrl(`${runState.id}-narasi.mp3`, runState.narrationAudioDataUrl!)}
+                          className={`rounded-md border px-2 py-1 text-[11px] font-semibold ${subtleBorder}`}
+                        >
+                          <Download className="mr-1 inline h-3 w-3" /> Unduh MP3
+                        </button>
+                        {runState.assembledVideo && (
+                          <button
+                            type="button"
+                            onClick={() => void handleReassembleVideo()}
+                            disabled={sceneBusyKey === 'reassemble'}
+                            className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white disabled:opacity-50"
+                          >
+                            Pasang ke Proyek Video
+                          </button>
+                        )}
+                      </div>
                     </div>
                   )}
                 </div>
