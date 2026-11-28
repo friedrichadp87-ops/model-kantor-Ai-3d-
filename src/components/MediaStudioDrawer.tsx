@@ -11,6 +11,7 @@ import {
   RotateCcw,
   AlertCircle,
   Loader2,
+  Volume2,
 } from 'lucide-react';
 import { BUILDING_FLOORS, type FloorId } from '../office/buildingFloors';
 import type { ProviderConfig } from '../office/providerConfig';
