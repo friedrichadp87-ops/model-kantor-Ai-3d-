@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { verifyFirebaseIdToken, isAllowedFirebaseUid } from './src/server/firebaseIdToken.ts';
 import { validateImageRequest, validateVideoRequest } from './src/office/mediaStudio.ts';
 import {
   canMarkReadyToPublish,
@@ -15,20 +16,14 @@ import {
   extractIndonesianBibleReferences,
   formatTemplatePromptDirectives,
   getChannelById,
-  lookupLocalBibleReference,
   validateShortsBrief,
   type CareFlag,
   type GuardianReport,
   type GuardianVerdict,
-  type LocalBibleDatabase,
   type PastoralReport,
   type ShortsChannelId,
   type ShortsDuration,
 } from './src/office/shortsFactory.ts';
-import {
-  buildMasterBibleSystemPolicy,
-  parseMasterBibleContent,
-} from './src/office/masterBible.ts';
 import { getSpecialistById } from './src/office/agentRoster.ts';
 import {
   mergeProviderConfig,
@@ -70,6 +65,22 @@ import {
 } from './src/office/floor2And3Workflows.ts';
 import { normalizeNetlifyApiPath } from './src/server/netlifyPath.ts';
 import { isValidEnvSecret, sanitizeEnvDefault } from './src/server/envSecrets.ts';
+import {
+  createYoutubeOAuthState,
+  decryptYoutubeRefreshToken,
+  encryptYoutubeRefreshToken,
+  getFirebaseBearerToken,
+  getYoutubeOAuthConfig,
+  isYoutubeChannelId,
+  isYoutubeOAuthConfigured,
+  isYoutubePrivacyStatus,
+  readYoutubeFirestoreDocument,
+  sanitizeYoutubeConnection,
+  verifyYoutubeOAuthState,
+  writeYoutubeFirestoreDocument,
+  deleteYoutubeFirestoreDocument,
+  type YoutubeChannelId,
+} from './src/server/youtubeOAuth.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -81,6 +92,50 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
+
+const FALLBACK_MASTER_BIBLE_CONTEXT = [
+  'ATURAN MUTLAK SUMBER UTAMA ALKITAB (BERLAKU DI SELURUH LANTAI 1, 2 & 3 KANTOR AI 3D):',
+  'Alkitab Terjemahan Baru (TB) yang diunggah pemilik adalah sumber utama untuk semua pekerjaan yang memakai rujukan Alkitab.',
+  'Jangan pernah mengarang kutipan ayat. Bila kutipan verbatim tidak tersedia dari Master Alkitab Firestore, nyatakan bahwa rujukan perlu diverifikasi dan jangan mengklaim kutipan berasal dari TB.',
+].join('\n');
+
+function masterBibleRecord(input: unknown): Record<string, unknown> {
+  return input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+}
+
+function getMasterBibleContext(input: unknown): string {
+  const value = masterBibleRecord(input).masterBibleContext;
+  return typeof value === 'string' && value.trim()
+    ? value.trim().slice(0, 35_000)
+    : FALLBACK_MASTER_BIBLE_CONTEXT;
+}
+
+function getMasterBibleVerses(input: unknown, reference?: string): Array<{ ref: string; text: string }> {
+  const value = masterBibleRecord(input).masterBibleVerses;
+  if (!Array.isArray(value)) return [];
+  const verses = value
+    .slice(0, 24)
+    .map((item) => {
+      const row = masterBibleRecord(item);
+      return {
+        ref: typeof row.ref === 'string' ? row.ref.slice(0, 100) : '',
+        text: typeof row.text === 'string' ? row.text.slice(0, 1800) : '',
+      };
+    })
+    .filter((item) => item.ref && item.text);
+  if (!reference?.trim()) return verses;
+  const normalized = reference.trim().toLocaleLowerCase('id-ID').replace(/\s+/g, ' ');
+  const matched = verses.filter((item) => {
+    const ref = item.ref.toLocaleLowerCase('id-ID').replace(/\s+/g, ' ');
+    return ref === normalized || normalized.startsWith(ref) || ref.startsWith(normalized);
+  });
+  return matched.length ? matched : verses.slice(0, 4);
+}
+
+function isMasterBibleActive(input: unknown): boolean {
+  return masterBibleRecord(input).masterBibleActive === true;
+}
+
 
 function resolveGeminiKeyForChannel(channelId?: ShortsChannelId): {
   apiKey: string;
@@ -286,10 +341,17 @@ function mapGeminiApiError(err: unknown, fallbackLabel: string): { statusCode: n
   return { statusCode: 500, message: rawMessage };
 }
 
-export function createApiApp(): express.Express {
+export interface ApiAppSecurityOverrides {
+  verifyToken?: typeof verifyFirebaseIdToken;
+  isUidAllowed?: typeof isAllowedFirebaseUid;
+}
+
+export function createApiApp(securityOverrides: ApiAppSecurityOverrides = {}): express.Express {
+  const verifyToken = securityOverrides.verifyToken ?? verifyFirebaseIdToken;
+  const isUidAllowed = securityOverrides.isUidAllowed ?? isAllowedFirebaseUid;
   const app = express();
   const defaultJsonParser = express.json({ limit: '15mb' });
-  let masterBibleStore: LocalBibleDatabase | null = null;
+  const apiRateWindows = new Map<string, { startedAt: number; count: number }>();
 
   // Normalize Netlify Functions URL prefix (/.netlify/functions/api/...) so all /api/* routes match identically
   app.use((req, _res, next) => {
@@ -300,83 +362,345 @@ export function createApiApp(): express.Express {
     next();
   });
 
+  // Provider-backed and state-changing routes require a valid Firebase session.
+  // Health/version probes are deliberately public and return no private user data.
+  app.use('/api', async (req, res, next) => {
+    if (req.method === 'GET' && (req.path === '/health' || req.path === '/pwa/remote-version')) {
+      next();
+      return;
+    }
+
+    const match = /^Bearer\s+(.+)$/i.exec(req.header('authorization') ?? '');
+    if (!match) {
+      res.status(401).json({ error: 'Autentikasi Firebase diperlukan untuk menggunakan API ini.' });
+      return;
+    }
+
+    try {
+      const claims = await verifyToken(match[1].trim());
+      if (!isUidAllowed(claims.sub)) {
+        res.status(403).json({ error: 'Akun Firebase ini tidak diizinkan menggunakan API Kantor AI.' });
+        return;
+      }
+
+      const now = Date.now();
+      const route = req.originalUrl || req.path;
+      const isProviderHeavyRoute =
+        /(?:agent-task|devotional\/research|shorts\/(?:produce|guardian)|bible-stories\/plan|bible-facts\/research|pipeline\/(?:plan-and-script|scene-keyframe|scene-animate|final-qc)|studio\/(?:image|video))/.test(route);
+      const bucketKey = `${claims.sub}:${isProviderHeavyRoute ? 'provider-heavy' : 'general'}`;
+      const bucketLimit = isProviderHeavyRoute ? 45 : 180;
+      const current = apiRateWindows.get(bucketKey);
+      if (!current || now - current.startedAt >= 60_000) {
+        apiRateWindows.set(bucketKey, { startedAt: now, count: 1 });
+      } else if (++current.count > bucketLimit) {
+        res.status(429).json({
+          error: `Batas sementara ${bucketLimit} permintaan per menit untuk kategori API ini tercapai. Coba kembali sebentar lagi.`,
+        });
+        return;
+      }
+
+      res.locals.firebaseUid = claims.sub;
+      res.locals.firebaseEmail = typeof claims.email === 'string' ? claims.email : null;
+      next();
+    } catch {
+      res.status(401).json({ error: 'Token Firebase tidak valid atau kedaluwarsa. Silakan masuk kembali.' });
+    }
+  });
+
   app.use((req, res, next) => {
-    if (req.path === '/api/pipeline/assemble-video' || req.path === '/api/bible/master') {
+    if (req.path === '/api/pipeline/assemble-video') {
       next();
       return;
     }
     defaultJsonParser(req, res, next);
   });
 
-  // Master Alkitab Terjemahan Baru (TB) — Sumber Utama Wajib Seluruh Lantai (L1, L2, L3)
-  app.get('/api/bible/master/status', (_req, res) => {
-    res.json({
-      loaded: Boolean(masterBibleStore && masterBibleStore.report.indexedVerseCount > 0),
-      report: masterBibleStore?.report ?? null,
-    });
+
+  // YouTube OAuth + SEO Publisher. OAuth refresh tokens are encrypted server-side;
+  // browser clients receive only short-lived access tokens for resumable uploads.
+  app.get('/api/youtube/status', async (req, res) => {
+    if (!isYoutubeOAuthConfigured()) {
+      res.json({ configured: false, channels: [] });
+      return;
+    }
+    try {
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const channels = await Promise.all(
+        (['daily-faith-inspiration', 'bible-stories-3d', 'bible-facts-mysteries'] as const).map(async (channelId) => {
+          const doc = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', channelId, firebaseToken);
+          return {
+            channelId,
+            connected: doc?.status === 'connected',
+            autoUploadEnabled: doc?.autoUploadEnabled === true,
+            privacyStatus: doc?.privacyStatus === 'public' || doc?.privacyStatus === 'unlisted' ? doc.privacyStatus : 'private',
+            targetChannelLabel: typeof doc?.targetChannelLabel === 'string' ? doc.targetChannelLabel : '',
+            googleEmail: typeof doc?.googleEmail === 'string' ? doc.googleEmail : '',
+            connectedAt: typeof doc?.connectedAt === 'string' ? doc.connectedAt : '',
+            lastUploadAt: typeof doc?.lastUploadAt === 'string' ? doc.lastUploadAt : '',
+          };
+        })
+      );
+      res.json({ configured: true, channels });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 500)
+        .json({ error: error instanceof Error ? error.message : 'Gagal membaca status koneksi YouTube.' });
+    }
   });
 
-  app.post('/api/bible/master', express.json({ limit: '50mb' }), (req, res) => {
-    const body = req.body as
-      | {
-          rawText?: string;
-          fileName?: string;
-          database?: LocalBibleDatabase;
-        }
-      | undefined;
-
+  app.post('/api/youtube/oauth/start', (req, res) => {
     try {
-      if (
-        body?.database &&
-        body.database.versesMap &&
-        typeof body.database.versesMap === 'object' &&
-        body.database.report &&
-        body.database.report.indexedVerseCount > 0
-      ) {
-        masterBibleStore = body.database;
-      } else if (typeof body?.rawText === 'string' && body.rawText.trim().length > 0) {
-        masterBibleStore = parseMasterBibleContent(body.rawText, String(body.fileName ?? ''));
-      } else {
-        res.status(400).json({
-          error: 'Kirimkan isi file Alkitab Terjemahan Baru (.json atau .txt) yang valid.',
-        });
+      const config = getYoutubeOAuthConfig();
+      const uid = String(res.locals.firebaseUid ?? '');
+      const body = req.body as { channelId?: unknown } | undefined;
+      if (!isYoutubeChannelId(body?.channelId)) {
+        res.status(400).json({ error: 'Pilih salah satu channel YouTube yang valid.' });
         return;
       }
-
-      res.json({
-        ok: true,
-        loaded: true,
-        report: masterBibleStore.report,
-      });
-    } catch (err) {
-      res.status(400).json({
-        error:
-          err instanceof Error
-            ? err.message
-            : 'Gagal memproses file Master Alkitab Terjemahan Baru.',
-      });
+      const state = createYoutubeOAuthState(uid, body.channelId, config.stateSecret);
+      const authorization = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+      authorization.searchParams.set('client_id', config.clientId);
+      authorization.searchParams.set('redirect_uri', config.redirectUri);
+      authorization.searchParams.set('response_type', 'code');
+      authorization.searchParams.set('scope', [
+        'https://www.googleapis.com/auth/youtube.upload',
+        'openid',
+        'email',
+        'profile',
+      ].join(' '));
+      authorization.searchParams.set('access_type', 'offline');
+      authorization.searchParams.set('prompt', 'consent');
+      authorization.searchParams.set('include_granted_scopes', 'true');
+      authorization.searchParams.set('state', state);
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ authorizationUrl: authorization.toString() });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 503)
+        .json({ error: error instanceof Error ? error.message : 'Konfigurasi OAuth YouTube belum lengkap.' });
     }
   });
 
-  app.post('/api/bible/master/lookup', (req, res) => {
-    const body = req.body as { reference?: string } | undefined;
-    const reference = String(body?.reference ?? '').trim();
-    if (!reference) {
-      res.status(400).json({ error: 'Masukkan referensi ayat (contoh: Mazmur 27:14).' });
-      return;
-    }
-    if (!masterBibleStore) {
-      res.status(404).json({
-        error: 'Master Alkitab Terjemahan Baru belum diunggah. Unggah file TB terlebih dahulu.',
+  app.post('/api/youtube/oauth/exchange', async (req, res) => {
+    try {
+      const config = getYoutubeOAuthConfig();
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const body = req.body as { code?: unknown; state?: unknown } | undefined;
+      const code = typeof body?.code === 'string' ? body.code.trim() : '';
+      const stateValue = typeof body?.state === 'string' ? body.state : '';
+      if (!code || code.length > 4096) {
+        res.status(400).json({ error: 'Kode persetujuan Google tidak valid.' });
+        return;
+      }
+      const state = verifyYoutubeOAuthState(stateValue, config.stateSecret);
+      if (state.uid !== uid) {
+        res.status(403).json({ error: 'OAuth YouTube ini dimulai dari akun Kantor AI yang berbeda.' });
+        return;
+      }
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code,
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          redirect_uri: config.redirectUri,
+          grant_type: 'authorization_code',
+        }),
+        signal: AbortSignal.timeout(15_000),
       });
-      return;
+      const tokenData = await tokenResponse.json() as {
+        access_token?: string; refresh_token?: string; expires_in?: number;
+        scope?: string; error_description?: string; error?: string;
+      };
+      if (!tokenResponse.ok || !tokenData.access_token) {
+        throw new Error(tokenData.error_description || tokenData.error || 'Google gagal menukar kode OAuth.');
+      }
+      const grantedScopes = typeof tokenData.scope === 'string' ? tokenData.scope.split(' ') : [];
+      if (grantedScopes.length > 0 && !grantedScopes.includes('https://www.googleapis.com/auth/youtube.upload')) {
+        throw new Error('Izin youtube.upload belum diberikan. Hubungkan kembali dan setujui izin upload.');
+      }
+      const oldDoc = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', state.channelId, firebaseToken);
+      const refreshToken = tokenData.refresh_token ||
+        (typeof oldDoc?.encryptedRefreshToken === 'string'
+          ? decryptYoutubeRefreshToken(oldDoc.encryptedRefreshToken, config.encryptionKey)
+          : '');
+      if (!refreshToken) {
+        throw new Error('Google tidak mengirim refresh token. Ulangi koneksi dan izinkan akses offline.');
+      }
+      const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const profile = profileResponse.ok
+        ? await profileResponse.json() as { email?: string; name?: string }
+        : {};
+      const now = new Date().toISOString();
+      await writeYoutubeFirestoreDocument(
+        uid, 'youtubeConnections', state.channelId,
+        {
+          ownerUid: uid,
+          channelId: state.channelId,
+          status: 'connected',
+          googleEmail: String(profile.email ?? '').slice(0, 254),
+          googleDisplayName: String(profile.name ?? '').slice(0, 120),
+          encryptedRefreshToken: encryptYoutubeRefreshToken(refreshToken, config.encryptionKey),
+          connectedAt: typeof oldDoc?.connectedAt === 'string' ? oldDoc.connectedAt : now,
+          updatedAt: now,
+          autoUploadEnabled: oldDoc?.autoUploadEnabled === true,
+          privacyStatus: oldDoc?.privacyStatus === 'public' || oldDoc?.privacyStatus === 'unlisted' ? oldDoc.privacyStatus : 'private',
+          targetChannelLabel: typeof oldDoc?.targetChannelLabel === 'string' ? oldDoc.targetChannelLabel : '',
+          grantedScopes: ['https://www.googleapis.com/auth/youtube.upload'],
+        },
+        firebaseToken
+      );
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ ok: true, channelId: state.channelId, googleEmail: profile.email ?? '', expiresIn: tokenData.expires_in ?? 3600 });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 400)
+        .json({ error: error instanceof Error ? error.message : 'Gagal menyimpan koneksi YouTube.' });
     }
-    res.json(lookupLocalBibleReference(masterBibleStore.versesMap, reference));
   });
 
-  app.delete('/api/bible/master', (_req, res) => {
-    masterBibleStore = null;
-    res.json({ ok: true, loaded: false });
+  app.post('/api/youtube/connections/config', async (req, res) => {
+    try {
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const body = req.body as {
+        channelId?: unknown; autoUploadEnabled?: unknown; privacyStatus?: unknown; targetChannelLabel?: unknown;
+      } | undefined;
+      if (!isYoutubeChannelId(body?.channelId)) {
+        res.status(400).json({ error: 'Channel YouTube tidak valid.' });
+        return;
+      }
+      const oldDoc = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, firebaseToken);
+      if (oldDoc?.status !== 'connected') {
+        res.status(409).json({ error: 'Hubungkan akun YouTube terlebih dahulu.' });
+        return;
+      }
+      const next = {
+        ...oldDoc,
+        ownerUid: uid,
+        channelId: body.channelId,
+        autoUploadEnabled: typeof body.autoUploadEnabled === 'boolean' ? body.autoUploadEnabled : oldDoc.autoUploadEnabled === true,
+        privacyStatus: isYoutubePrivacyStatus(body.privacyStatus) ? body.privacyStatus : 'private',
+        targetChannelLabel: typeof body.targetChannelLabel === 'string' ? body.targetChannelLabel.trim().slice(0, 120) : String(oldDoc.targetChannelLabel ?? ''),
+        updatedAt: new Date().toISOString(),
+      };
+      await writeYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, next, firebaseToken);
+      res.json({ ok: true, channel: sanitizeYoutubeConnection(body.channelId, next) });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 500)
+        .json({ error: error instanceof Error ? error.message : 'Gagal menyimpan pengaturan YouTube.' });
+    }
+  });
+
+  app.post('/api/youtube/access-token', async (req, res) => {
+    try {
+      const config = getYoutubeOAuthConfig();
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const body = req.body as { channelId?: unknown } | undefined;
+      if (!isYoutubeChannelId(body?.channelId)) {
+        res.status(400).json({ error: 'Channel YouTube tidak valid.' });
+        return;
+      }
+      const connection = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, firebaseToken);
+      if (connection?.status !== 'connected' || typeof connection.encryptedRefreshToken !== 'string') {
+        res.status(409).json({ error: 'Akun YouTube untuk channel ini belum terhubung.' });
+        return;
+      }
+      const refreshToken = decryptYoutubeRefreshToken(connection.encryptedRefreshToken, config.encryptionKey);
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          refresh_token: refreshToken,
+          grant_type: 'refresh_token',
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const tokenData = await tokenResponse.json() as { access_token?: string; expires_in?: number; error_description?: string };
+      if (!tokenResponse.ok || !tokenData.access_token) {
+        if (tokenData.error_description?.toLowerCase().includes('revoked')) {
+          res.status(401).json({ error: 'Izin YouTube telah dicabut. Hubungkan ulang akun YouTube.' });
+          return;
+        }
+        throw new Error(tokenData.error_description || 'Gagal memperbarui token YouTube.');
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ accessToken: tokenData.access_token, expiresIn: tokenData.expires_in ?? 3600 });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 500)
+        .json({ error: error instanceof Error ? error.message : 'Gagal memperoleh token upload YouTube.' });
+    }
+  });
+
+  app.post('/api/youtube/uploads/record', async (req, res) => {
+    try {
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const body = req.body as {
+        channelId?: unknown; videoId?: unknown; title?: unknown; description?: unknown;
+        privacyStatus?: unknown; status?: unknown; error?: unknown; runId?: unknown;
+      } | undefined;
+      if (!isYoutubeChannelId(body?.channelId) || typeof body?.videoId !== 'string' || !/^[\w-]{6,32}$/.test(body.videoId)) {
+        res.status(400).json({ error: 'Data riwayat upload YouTube tidak valid.' });
+        return;
+      }
+      const recordId = body.videoId;
+      const record = {
+        ownerUid: uid,
+        channelId: body.channelId,
+        videoId: recordId,
+        title: String(body.title ?? '').slice(0, 100),
+        description: String(body.description ?? '').slice(0, 5000),
+        privacyStatus: isYoutubePrivacyStatus(body.privacyStatus) ? body.privacyStatus : 'private',
+        status: String(body.status ?? 'uploaded').slice(0, 40),
+        error: String(body.error ?? '').slice(0, 1000),
+        runId: String(body.runId ?? '').slice(0, 140),
+        createdAt: new Date().toISOString(),
+        videoUrl: `https://www.youtube.com/watch?v=${recordId}`,
+      };
+      await writeYoutubeFirestoreDocument(uid, 'youtubeUploads', recordId, record, firebaseToken);
+      const connection = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, firebaseToken);
+      if (connection) {
+        await writeYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, {
+          ...connection, lastUploadAt: record.createdAt, updatedAt: record.createdAt,
+        }, firebaseToken);
+      }
+      res.json({ ok: true, videoUrl: record.videoUrl });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 500)
+        .json({ error: error instanceof Error ? error.message : 'Gagal menyimpan histori upload YouTube.' });
+    }
+  });
+
+  app.post('/api/youtube/connections/disconnect', async (req, res) => {
+    try {
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const body = req.body as { channelId?: unknown } | undefined;
+      if (!isYoutubeChannelId(body?.channelId)) {
+        res.status(400).json({ error: 'Channel YouTube tidak valid.' });
+        return;
+      }
+      await deleteYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, firebaseToken);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 500)
+        .json({ error: error instanceof Error ? error.message : 'Gagal memutus koneksi YouTube.' });
+    }
+  });
+
+  // Master Bible is never held in serverless memory. The authenticated client reads
+  // the user's Firestore Master Bible and supplies only the relevant policy/verse context.
+  app.all('/api/bible/master', (_req, res) => {
+    res.status(410).json({
+      error: 'Penyimpanan Master Alkitab di memori server sudah dihentikan. Gunakan Master Alkitab Firestore.',
+    });
   });
 
   // Lantai 1 Daily Faith & Inspiration — Riset Sumber Renungan Harian Valid (LAI / Sumber Terpercaya) via Google Search Grounding
@@ -391,10 +715,7 @@ export function createApiApp(): express.Express {
       year: 'numeric',
     }).format(new Date());
 
-    const biblePolicy = buildMasterBibleSystemPolicy(
-      masterBibleStore,
-      topicHint || 'Renungan harian Alkitab'
-    );
+    const biblePolicy = { policyBlock: getMasterBibleContext(body) };
 
     const systemInstruction = `Kamu adalah Tim Riset Renungan Harian Lantai 1 (Daily Faith & Inspiration) di Kantor AI 3D.
 Tugasmu mencari dan menyusun ringkasan tema renungan harian Kristen yang VALID, alkitabiah, dan memberkati untuk hari ini (${todayWib}), memprioritaskan sumber terpercaya seperti Lembaga Alkitab Indonesia (LAI / alkitab.or.id), Sabda.org, atau renungan harian gerejawi yang sah.
@@ -471,9 +792,7 @@ PERINTAH_PRODUKSI: <1 paragraf instruksi siap eksekusi untuk membuat renungan 2 
         }
       }
 
-      const matchedMasterVerses = masterBibleStore
-        ? lookupLocalBibleReference(masterBibleStore.versesMap, bibleReference).verses
-        : [];
+      const matchedMasterVerses = getMasterBibleVerses(body, bibleReference);
 
       res.json({
         dateLabel: todayWib,
@@ -485,7 +804,7 @@ PERINTAH_PRODUKSI: <1 paragraf instruksi siap eksekusi untuk membuat renungan 2 
         recommendedCommand,
         sourceLinks: sourceLinks.slice(0, 5),
         matchedMasterVerses,
-        masterBibleActive: Boolean(masterBibleStore),
+        masterBibleActive: isMasterBibleActive(body),
         keySlotUsed,
         researchedAt: new Date().toISOString(),
       });
@@ -881,7 +1200,7 @@ PERINTAH_PRODUKSI: <1 paragraf instruksi siap eksekusi untuk membuat renungan 2 
       specialty: `${specialist.summary}. Tanggung jawab: ${specialist.responsibilities.join(' ')}`,
     };
 
-    const biblePolicy = buildMasterBibleSystemPolicy(masterBibleStore, task);
+    const biblePolicy = { policyBlock: getMasterBibleContext(body) };
     const systemInstruction =
       `Kamu adalah ${persona.name}, menjabat sebagai ${persona.role} di ${floorCfg.label} (${floorCfg.channelName} — ${floorCfg.subtitle}) pada Menara Kantor AI 3D. ` +
       `Fokus kerjamu: ${persona.specialty} ` +
@@ -1379,10 +1698,7 @@ PERINTAH_PRODUKSI: <1 paragraf instruksi siap eksekusi untuk membuat renungan 2 
           })}`
         : '';
 
-    const serverBiblePolicy = buildMasterBibleSystemPolicy(
-      masterBibleStore,
-      `${title} ${bibleReference} ${notes}`
-    );
+    const serverBiblePolicy = { policyBlock: getMasterBibleContext(body) };
 
     const systemInstruction = `Kamu adalah Pabrik Konten YouTube Multi-Agen berbahasa Indonesia untuk 3 channel Kristen:
 1. Bible Stories 3D (cerita Alkitab animasi 3D ramah anak & keluarga, Made for Kids)
@@ -1864,7 +2180,7 @@ Kembalikan HANYA JSON valid:
       res.json({
         plan: basePlan,
         aiEnriched: false,
-        masterBibleActive: Boolean(masterBibleStore),
+        masterBibleActive: isMasterBibleActive(body),
         keySlotUsed: resolveGeminiKeyForChannel('bible-stories-3d').keySlotUsed,
       });
       return;
@@ -1873,7 +2189,7 @@ Kembalikan HANYA JSON valid:
     try {
       const { ai, keySlotUsed } = createGeminiClientWithMeta('bible-stories-3d');
       const refListText = basePlan.episodes.map((ep) => ep.reference).join(', ');
-      const biblePolicy = buildMasterBibleSystemPolicy(masterBibleStore, refListText);
+      const biblePolicy = { policyBlock: getMasterBibleContext(body) };
 
       const systemInstruction = `Kamu adalah Tim Perencana Cerita Alkitab Lantai 2 (Bible Stories 3D).
 Tugasmu menyusun rencana detail episode berdasarkan aturan MUTLAK:
@@ -1948,7 +2264,7 @@ ${basePlan.episodes
           episodes: mergedEpisodes,
         },
         aiEnriched: true,
-        masterBibleActive: Boolean(masterBibleStore),
+        masterBibleActive: isMasterBibleActive(body),
         keySlotUsed,
       });
     } catch (err) {
@@ -1976,10 +2292,7 @@ ${basePlan.episodes
       BIBLE_FACT_CATEGORIES.find((c) => c.id === category) ?? BIBLE_FACT_CATEGORIES[0];
     const topicHint = String(body?.topicHint ?? '').trim().slice(0, 180);
 
-    const biblePolicy = buildMasterBibleSystemPolicy(
-      masterBibleStore,
-      topicHint || catMeta.exampleTopic
-    );
+    const biblePolicy = { policyBlock: getMasterBibleContext(body) };
 
     const systemInstruction = `Kamu adalah Tim Riset Fakta Alkitab & Misteri di Lantai 3 (Bible Facts & Mysteries).
 Tugasmu mencari fakta Alkitab yang akurat, bertanggung jawab, dan jarang diketahui orang, mencakup:
@@ -2046,9 +2359,7 @@ Kembalikan HANYA JSON valid (tanpa markdown codefence):
       }
 
       const bibleReference = String(parsed.bibleReference ?? '2 Samuel 7:12-16').trim();
-      const matchedMasterVerses = masterBibleStore
-        ? lookupLocalBibleReference(masterBibleStore.versesMap, bibleReference).verses.slice(0, 4)
-        : [];
+      const matchedMasterVerses = getMasterBibleVerses(body, bibleReference).slice(0, 4);
 
       const title = String(parsed.title ?? `Fakta Alkitab: ${topicHint || catMeta.label}`).trim();
       const visualReconstructionBrief =
@@ -2077,7 +2388,7 @@ Kembalikan HANYA JSON valid (tanpa markdown codefence):
         recommendedCommand,
         sourceLinks: sourceLinks.slice(0, 5),
         matchedMasterVerses,
-        masterBibleActive: Boolean(masterBibleStore),
+        masterBibleActive: isMasterBibleActive(body),
         keySlotUsed,
       });
     } catch (err) {
@@ -2119,10 +2430,7 @@ Kembalikan HANYA JSON valid (tanpa markdown codefence):
         ? formatTemplatePromptDirectives(body.channelTemplate as never)
         : '';
 
-    const serverBiblePolicy = buildMasterBibleSystemPolicy(
-      masterBibleStore,
-      `${input.bookScope} ${input.command}`
-    );
+    const serverBiblePolicy = { policyBlock: getMasterBibleContext(body) };
     const isDailyFaithLongDevotional =
       input.channelId === 'daily-faith-inspiration' && input.durationSeconds === 170;
     const isBibleStoriesChapter = input.channelId === 'bible-stories-3d';
@@ -2924,10 +3232,7 @@ Perintah Pemilik Studio: ${input.command}`;
         }))
       : [];
 
-    const qcBiblePolicy = buildMasterBibleSystemPolicy(
-      masterBibleStore,
-      `${JSON.stringify(body?.storyPlan ?? {})} ${JSON.stringify(body?.scriptArc ?? {})}`
-    );
+    const qcBiblePolicy = { policyBlock: getMasterBibleContext(body) };
     const systemInstruction = `Kamu adalah Tim Quality Control Akhir (Theological Guardian + Pastoral Sensitivity Checker + SEO Publisher) untuk channel "${channel.name}".
 Audit kesesuaian hasil akhir produksi terhadap rencana cerita/renungan Alkitab awal, kesetiaan mutlak pada Alkitab Terjemahan Baru (TB), naskah ber-timestamp, kelengkapan adegan visual/audio, dan metadata YouTube.
 

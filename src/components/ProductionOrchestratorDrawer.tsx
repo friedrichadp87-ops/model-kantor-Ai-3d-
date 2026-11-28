@@ -42,6 +42,7 @@ import {
   type PipelineYoutubeMetadata,
   type SceneAnimationMode,
 } from '../office/productionPipeline';
+import { clearActiveApiWorkContext, setActiveApiWorkContext } from '../firebase/apiFetch';
 import type { AvSyncCheckReport } from '../office/floor2And3Workflows';
 import type { ProviderConfig, ServerProviderStatus } from '../office/providerConfig';
 import {
@@ -53,9 +54,11 @@ import {
   type ShortsQueueItem,
 } from '../office/shortsFactory';
 import { getFloorByChannelId } from '../office/buildingFloors';
+import { uploadVideoToYoutube, type YoutubeUploadResult } from '../firebase/youtubeUpload';
 import type { AgentId, LightingPreset } from '../office/types';
 
 export interface OrchestratorStageEvent {
+  runId?: string;
   channelId: ShortsChannelId;
   agentId: AgentId;
   stageId: PipelineStageId;
@@ -179,8 +182,13 @@ export function ProductionOrchestratorDrawer({
   const [sceneBusyKey, setSceneBusyKey] = useState<string | null>(null);
   const [runState, setRunState] = useState<PipelineRunState | null>(null);
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
+  const [youtubeUploadBusy, setYoutubeUploadBusy] = useState(false);
+  const [youtubeUploadResult, setYoutubeUploadResult] = useState<YoutubeUploadResult | null>(null);
+  const [uploadedRunId, setUploadedRunId] = useState<string | null>(null);
+  const [youtubeUploadError, setYoutubeUploadError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
 
   const commandInputId = useId();
   const scopeInputId = useId();
@@ -269,6 +277,7 @@ export function ProductionOrchestratorDrawer({
     const stageDef = bp.stages.find((s) => s.id === stageId);
     if (!stageDef) return;
     onStageEvent({
+      runId: activeRunIdRef.current ?? undefined,
       channelId: bp.channelId,
       agentId: stageDef.leadAgentId,
       stageId,
@@ -327,6 +336,8 @@ export function ProductionOrchestratorDrawer({
       srtText: '',
     };
 
+    activeRunIdRef.current = initialRun.id;
+    setActiveApiWorkContext(initialRun.id, input.channelId);
     setRunState(initialRun);
     setRunning(true);
 
@@ -831,6 +842,9 @@ export function ProductionOrchestratorDrawer({
           );
           runStageEvent(bp, 'final_qc', 'done', `${report.verdict} (${report.planAlignmentScore}%)`);
           setActiveTab('final-qc');
+          if (report.readyForYoutubeUpload && assembledArtifact && workingMeta) {
+            void publishYoutubeVideo({ id: initialRun.id, channelId: input.channelId, assembledVideo: assembledArtifact, youtubeMetadata: workingMeta, finalQc: report }, true);
+          }
         } else {
           const msg = qcData.error ?? 'Gagal menjalankan Quality Control akhir.';
           updateStage('final_qc', 'error', msg, null);
@@ -843,6 +857,7 @@ export function ProductionOrchestratorDrawer({
         runStageEvent(bp, 'final_qc', 'error', msg);
       }
     } finally {
+      clearActiveApiWorkContext(initialRun.id);
       setRunning(false);
     }
   };
@@ -977,6 +992,32 @@ export function ProductionOrchestratorDrawer({
     }
   };
 
+  const publishYoutubeVideo = async (
+    source: { id: string; channelId: ShortsChannelId; assembledVideo?: AssembledVideoArtifact; youtubeMetadata?: PipelineYoutubeMetadata; finalQc?: FinalQcReport },
+    automatic: boolean
+  ) => {
+    if (!source.assembledVideo?.dataUrl || !source.youtubeMetadata || !source.finalQc?.readyForYoutubeUpload) {
+      if (!automatic) setYoutubeUploadError('Video final dan QC LULUS wajib tersedia sebelum upload.');
+      return;
+    }
+    if (youtubeUploadBusy || uploadedRunId === source.id) return;
+    setYoutubeUploadBusy(true); setYoutubeUploadError(null); setYoutubeUploadResult(null);
+    try {
+      const statusResponse = await fetch('/api/youtube/status', { cache: 'no-store' });
+      const statusData = await statusResponse.json() as { channels?: Array<{ channelId: string; connected: boolean; autoUploadEnabled: boolean; privacyStatus: 'private' | 'unlisted' | 'public' }>; error?: string };
+      if (!statusResponse.ok) throw new Error(statusData.error || 'Tidak dapat membaca status akun YouTube.');
+      const channel = statusData.channels?.find((item) => item.channelId === source.channelId);
+      if (!channel?.connected) { if (automatic) return; throw new Error('Hubungkan akun YouTube untuk channel ini melalui Pengaturan → YouTube terlebih dahulu.'); }
+      if (automatic && !channel.autoUploadEnabled) return;
+      const result = await uploadVideoToYoutube({ channelId: source.channelId, videoDataUrl: source.assembledVideo.dataUrl, metadata: source.youtubeMetadata, privacyStatus: channel.privacyStatus || 'private', runId: source.id });
+      setYoutubeUploadResult(result); setUploadedRunId(source.id);
+      setSavedNotice(result.historyWarning || ('Video berhasil diunggah ke YouTube: ' + result.title));
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Upload YouTube gagal.';
+      setYoutubeUploadError(message);
+      if (automatic) setSavedNotice('QC lulus, tetapi upload otomatis gagal: ' + message);
+    } finally { setYoutubeUploadBusy(false); }
+  };
   const handleSaveApprovedToQueue = () => {
     if (!runState?.storyPlan || !runState.finalQc) return;
     const isApproved = runState.finalQc.readyForYoutubeUpload;
@@ -1763,6 +1804,13 @@ export function ProductionOrchestratorDrawer({
                           <Tv className="h-3.5 w-3.5" aria-hidden="true" />
                           Putar di Layar 3D
                         </button>
+                        {runState.finalQc?.readyForYoutubeUpload && runState.youtubeMetadata && (
+                          <button type="button" disabled={youtubeUploadBusy || uploadedRunId === runState.id} onClick={() => void publishYoutubeVideo({ ...runState, channelId: runState.input.channelId }, false)}
+                            className={'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ' + (isDark ? 'bg-red-600 hover:bg-red-500' : 'bg-red-700 hover:bg-red-600')}>
+                            {youtubeUploadBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
+                            {uploadedRunId === runState.id ? 'Sudah Diunggah' : 'Upload ke YouTube'}
+                          </button>
+                        )}
                         <button
                           type="button"
                           onClick={() =>
@@ -1784,6 +1832,13 @@ export function ProductionOrchestratorDrawer({
                     )}
                   </div>
 
+                  {youtubeUploadResult && (
+                    <div className="mt-3 rounded-lg border border-emerald-500/40 bg-emerald-500/10 p-3 text-xs">
+                      <p className="font-semibold text-emerald-500">Video berhasil diunggah</p>
+                      <a className="mt-1 inline-block underline" href={youtubeUploadResult.videoUrl} target="_blank" rel="noreferrer">{youtubeUploadResult.title} — Buka YouTube</a>
+                    </div>
+                  )}
+                  {youtubeUploadError && <p role="alert" className="mt-3 rounded-lg border border-rose-500/40 bg-rose-500/10 p-3 text-xs text-rose-500">{youtubeUploadError}</p>}
                   {runState.assembledVideo ? (
                     <div className="mt-3 flex justify-center rounded-lg bg-black/90 p-2">
                       <video

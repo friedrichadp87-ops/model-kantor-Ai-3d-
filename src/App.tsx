@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { OfficeHUD } from './components/OfficeHUD';
+import { YoutubeOAuthCallback } from './components/YoutubeOAuthCallback';
+import { clearApiMasterBibleCache, setApiMasterBibleCache } from './firebase/apiFetch';
 import { OfficeViewport, type OfficeViewportHandle } from './components/OfficeViewport';
 import type { MediaStudioPrefill } from './components/MediaStudioDrawer';
 import type { DivisionToolMode } from './components/DivisionToolsDrawer';
@@ -17,6 +19,9 @@ import {
   loadMasterBibleFromFirestore,
   subscribeAuthUser,
   subscribeShortsQueue,
+  subscribeWorkHistory,
+  subscribeMasterBible,
+  appendWorkHistoryToFirestore,
   subscribeWorkspaceSettings,
   syncAgentTaskToFirestore,
   syncMasterBibleToFirestore,
@@ -26,7 +31,7 @@ import {
   testFirestoreConnection,
   type FirestoreSyncStatus,
 } from './firebase/client';
-import type { FirebaseAuthUserSummary } from './firebase/officeSync';
+import type { FirebaseAuthUserSummary, WorkHistoryRecord } from './firebase/officeSync';
 import {
   appendActivityLog,
   createInitialActivityLog,
@@ -68,7 +73,6 @@ import {
 import {
   buildMasterBibleSystemPolicy,
   parseMasterBibleContent,
-  syncMasterBibleToBackend,
   type MasterBibleSyncMode,
 } from './office/masterBible';
 import {
@@ -123,6 +127,7 @@ function createInitialFloorTasksMap(): Record<string, TaskEntry[]> {
 
 export default function App() {
   const viewportRef = useRef<OfficeViewportHandle | null>(null);
+  const activeShortsRunRef = useRef<string | null>(null);
 
   const initialBuilding = useRef<BuildingSimulationState | null>(null);
   if (!initialBuilding.current) {
@@ -198,6 +203,7 @@ export default function App() {
   const [tasksByFloorAgent, setTasksByFloorAgent] = useState<Record<string, TaskEntry[]>>(
     createInitialFloorTasksMap
   );
+  const [workHistory, setWorkHistory] = useState<WorkHistoryRecord[]>([]);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseAuthUserSummary | null>(null);
   const [firebaseAuthLoading, setFirebaseAuthLoading] = useState<boolean>(true);
   const [firebaseModalOpen, setFirebaseModalOpen] = useState<boolean>(false);
@@ -246,6 +252,8 @@ export default function App() {
           ])
         );
       } else {
+        setWorkHistory([]);
+        clearApiMasterBibleCache();
         setFirebaseSyncStatus((prev) => ({
           ...prev,
           state: 'idle',
@@ -262,20 +270,21 @@ export default function App() {
     };
   }, []);
 
-  // Hydrate building-wide Master Alkitab Terjemahan Baru (TB) from IndexedDB and sync to backend memory
+  // Hydrate a local offline copy of the building-wide Master Alkitab (Firestore remains authoritative).
   useEffect(() => {
     let active = true;
     void loadMasterBibleFromIndexedDb().then(async (saved) => {
       if (!active || !saved) return;
       setMasterBible(saved);
-      const outcome = await syncMasterBibleToBackend(saved);
       if (!active) return;
-      setMasterBibleSyncMode(outcome.mode);
-      setMasterBibleSyncNotice(outcome.notice);
+      setMasterBibleSyncMode('local-only');
+      setMasterBibleSyncNotice(
+        'Master Alkitab ditemukan di penyimpanan lokal. Masuk ke Firebase untuk memeriksa dan menyinkronkan sumber utama Firestore.'
+      );
       setActivityLog((prev) =>
         appendActivityLog(prev, [
           createStudioActivityEntry(
-            `Master Alkitab TB aktif di L1, L2 & L3 (${saved.report.sourceName} · ${saved.report.indexedVerseCount.toLocaleString('id-ID')} ayat${outcome.mode === 'local-only' ? ' · Mode Lokal' : ''})`
+            `Master Alkitab TB tersedia sebagai salinan lokal offline di L1, L2 & L3 (${saved.report.sourceName} · ${saved.report.indexedVerseCount.toLocaleString('id-ID')} ayat)`
           ),
         ])
       );
@@ -365,6 +374,8 @@ export default function App() {
       handleSubError
     );
 
+    const unsubHistory = subscribeWorkHistory(uid, setWorkHistory, handleSubError);
+
     const unsubQueue = subscribeShortsQueue(
       uid,
       (items) => {
@@ -381,8 +392,34 @@ export default function App() {
       handleSubError
     );
 
-    // Sync Master Alkitab Terjemahan Baru (TB) bi-directionally with Firebase Cloud Firestore
+    // Sync the building-wide Master Bible with Firestore, then listen for updates from
+    // other signed-in devices so all three floors keep using the same uploaded edition.
     let bibleSyncActive = true;
+    let unsubscribeMasterBible: (() => void) | null = null;
+    const attachMasterBibleListener = () => {
+      if (unsubscribeMasterBible || !bibleSyncActive) return;
+      unsubscribeMasterBible = subscribeMasterBible(
+        uid,
+        (cloudBible) => {
+          if (!bibleSyncActive) return;
+          if (!cloudBible) {
+            clearApiMasterBibleCache();
+            setMasterBible(null);
+            setMasterBibleSyncMode('local-only');
+            setMasterBibleSyncNotice('Belum ada Master Alkitab di Firestore untuk akun ini.');
+            void clearMasterBibleFromIndexedDb();
+            return;
+          }
+          setMasterBible(cloudBible);
+          setMasterBibleSyncMode('firebase-synced');
+          setMasterBibleSyncNotice(null);
+          setApiMasterBibleCache(uid, cloudBible);
+          void saveMasterBibleToIndexedDb(cloudBible).catch(() => undefined);
+        },
+        handleSubError
+      );
+    };
+
     void loadMasterBibleFromFirestore(uid).then(async (cloudRes) => {
       if (!bibleSyncActive) return;
       if (!cloudRes.ok && cloudRes.permissionDenied) {
@@ -402,7 +439,7 @@ export default function App() {
         setMasterBible(cloudBible);
         setMasterBibleSyncMode('firebase-synced');
         setMasterBibleSyncNotice(null);
-        void syncMasterBibleToBackend(cloudBible);
+        setApiMasterBibleCache(uid, cloudBible);
         setActivityLog((prev) =>
           appendActivityLog(prev, [
             createStudioActivityEntry(
@@ -410,15 +447,21 @@ export default function App() {
             ),
           ])
         );
+        attachMasterBibleListener();
         return;
       }
 
       // Firestore does not have Master Alkitab yet — push local IndexedDB copy automatically!
       const localBible = masterBibleRef.current ?? (await loadMasterBibleFromIndexedDb());
-      if (!bibleSyncActive || !localBible) return;
+      if (!bibleSyncActive) return;
+      if (!localBible) {
+        attachMasterBibleListener();
+        return;
+      }
       const pushRes = await syncMasterBibleToFirestore(uid, localBible);
       if (!bibleSyncActive) return;
       if (pushRes.ok) {
+        setApiMasterBibleCache(uid, localBible);
         setMasterBibleSyncMode('firebase-synced');
         setMasterBibleSyncNotice(
           `Tersimpan di Firebase Firestore (${pushRes.chunkCount ?? 1} bagian) — otomatis sinkron di PC, Android & Netlify.`
@@ -430,6 +473,7 @@ export default function App() {
             ),
           ])
         );
+        attachMasterBibleListener();
       } else if (pushRes.permissionDenied) {
         setMasterBibleSyncNotice(
           'Alkitab aktif di browser. Tambahkan aturan Firestore Rules untuk masterBible & masterBibleChunks (buka panel Firebase) agar tersimpan di Cloud.'
@@ -441,6 +485,8 @@ export default function App() {
       bibleSyncActive = false;
       unsubSettings();
       unsubQueue();
+      unsubHistory();
+      unsubscribeMasterBible?.();
     };
   }, [firebaseUser]);
 
@@ -949,8 +995,9 @@ export default function App() {
         const parsed = parseMasterBibleContent(rawText, file.name);
         await saveMasterBibleToIndexedDb(parsed);
 
-        // Activate immediately in browser state across L1, L2 & L3
+        // Activate the one building-wide Master Bible for every floor and API request.
         setMasterBible(parsed);
+        clearApiMasterBibleCache();
 
         // 1. Primary cloud persistence: save chunked Master Alkitab directly to Firebase Firestore when signed in
         let savedToFirebase = false;
@@ -959,28 +1006,26 @@ export default function App() {
           const fbRes = await syncMasterBibleToFirestore(firebaseUser.uid, parsed);
           if (fbRes.ok) {
             savedToFirebase = true;
+            setApiMasterBibleCache(firebaseUser.uid, parsed);
             firebaseNotice = `Tersimpan di Firebase Firestore (${fbRes.chunkCount ?? 1} bagian) — otomatis sinkron di PC, Android & Netlify.`;
           } else if (fbRes.permissionDenied) {
+            clearApiMasterBibleCache();
             firebaseNotice =
               'Alkitab aktif di browser. Tambahkan aturan Firestore Rules untuk masterBible & masterBibleChunks (buka panel Firebase) agar tersimpan di Cloud.';
           } else {
+            clearApiMasterBibleCache();
             firebaseNotice = `Alkitab aktif di browser. Sinkronisasi Firebase tertunda (${fbRes.errorMessage || 'coba lagi'}).`;
           }
         }
-
-        // 2. Non-blocking backend memory sync (for local/Cloud Run server AI agents)
-        const backendOutcome = await syncMasterBibleToBackend(parsed);
 
         if (savedToFirebase) {
           setMasterBibleSyncMode('firebase-synced');
           setMasterBibleSyncNotice(firebaseNotice);
         } else {
-          setMasterBibleSyncMode(backendOutcome.mode);
+          setMasterBibleSyncMode('local-only');
           setMasterBibleSyncNotice(
             firebaseNotice ??
-              (firebaseUser
-                ? backendOutcome.notice
-                : 'Alkitab aktif di browser (IndexedDB). Masuk ke akun Firebase agar Alkitab otomatis tersimpan di Cloud Firestore.')
+              'Alkitab aktif pada perangkat ini (IndexedDB). Masuk ke akun Firebase agar Master Alkitab tersimpan permanen di Firestore.'
           );
         }
 
@@ -992,6 +1037,7 @@ export default function App() {
           ])
         );
       } catch (err) {
+        clearApiMasterBibleCache();
         const msg =
           err instanceof Error ? err.message : 'Gagal membaca file Alkitab Terjemahan Baru.';
         setMasterBibleError(msg);
@@ -1007,13 +1053,16 @@ export default function App() {
     setMasterBibleError(null);
     setMasterBibleSyncNotice(null);
     try {
-      await clearMasterBibleFromIndexedDb();
       if (firebaseUser) {
-        await deleteMasterBibleFromFirestore(firebaseUser.uid).catch(() => undefined);
+        const cloudDelete = await deleteMasterBibleFromFirestore(firebaseUser.uid);
+        if (!cloudDelete.ok) {
+          throw new Error(cloudDelete.errorMessage || 'Master Alkitab gagal dihapus dari Firestore.');
+        }
       }
-      await fetch('/api/bible/master', { method: 'DELETE' }).catch(() => undefined);
+      await clearMasterBibleFromIndexedDb();
+      clearApiMasterBibleCache();
       setMasterBible(null);
-      setMasterBibleSyncMode('server-synced');
+      setMasterBibleSyncMode('local-only');
       setActivityLog((prev) =>
         appendActivityLog(prev, [
           createStudioActivityEntry(
@@ -1029,33 +1078,6 @@ export default function App() {
       setMasterBibleBusy(false);
     }
   }, [firebaseUser]);
-
-  const handleDevotionalResearchEvent = useCallback(
-    (phase: 'start' | 'done' | 'error', detail: string) => {
-      const taskId = 'l1_devotional_research';
-      if (phase === 'start') {
-        viewportRef.current?.startAgentTask(1, 'trend-researcher', `${taskId}_t`, detail);
-        viewportRef.current?.startAgentTask(1, 'bible-researcher', `${taskId}_b`, detail);
-        setActivityLog((prev) =>
-          appendActivityLog(prev, [
-            createStudioActivityEntry(`[L1] Riset Renungan Valid dimulai: ${detail}`),
-          ])
-        );
-      } else if (phase === 'done') {
-        viewportRef.current?.finishAgentTask(1, 'trend-researcher', `${taskId}_t`, true);
-        viewportRef.current?.finishAgentTask(1, 'bible-researcher', `${taskId}_b`, true);
-        setActivityLog((prev) =>
-          appendActivityLog(prev, [
-            createStudioActivityEntry(`[L1] Renungan harian valid siap (2m 50d): ${detail}`),
-          ])
-        );
-      } else {
-        viewportRef.current?.finishAgentTask(1, 'trend-researcher', `${taskId}_t`, false);
-        viewportRef.current?.finishAgentTask(1, 'bible-researcher', `${taskId}_b`, false);
-      }
-    },
-    []
-  );
 
   const handleCloseControls = useCallback(() => {
     setControlsOpen(false);
@@ -1144,11 +1166,138 @@ export default function App() {
     setActiveDivision('pengaturan');
   }, []);
 
+  const appendFloorWorkHistory = useCallback(
+    (entry: {
+      id: string;
+      floorId: FloorId;
+      phase: 'start' | 'completed' | 'error' | 'warning';
+      eventType: string;
+      title: string;
+      agentId?: string;
+      agentName?: string;
+      projectId?: string;
+      runId?: string;
+      taskId?: string;
+      stageId?: string;
+      stageTitle?: string;
+      input?: string;
+      output?: string;
+      error?: string;
+      detail?: string;
+      provider?: string;
+      model?: string;
+    }) => {
+      if (!firebaseUser) return;
+      const floorCfg = BUILDING_FLOORS[entry.floorId];
+      const now = new Date().toISOString();
+      const uniqueId = `${entry.id}_${entry.phase}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      void appendWorkHistoryToFirestore(firebaseUser.uid, {
+        id: uniqueId,
+        floorId: entry.floorId,
+        floorName: floorCfg.label,
+        channelId: floorCfg.channelId,
+        channelName: floorCfg.channelName,
+        projectId: entry.projectId ?? entry.runId ?? entry.taskId ?? entry.id,
+        runId: entry.runId ?? '',
+        taskId: entry.taskId ?? entry.id,
+        agentId: entry.agentId ?? '',
+        agentName: entry.agentName ?? '',
+        stageId: entry.stageId ?? '',
+        stageTitle: entry.stageTitle ?? '',
+        eventType: entry.eventType,
+        phase: entry.phase,
+        title: entry.title,
+        input: entry.input ?? '',
+        output: entry.output ?? '',
+        error: entry.error ?? '',
+        detail: entry.detail ?? '',
+        provider: entry.provider ?? '',
+        model: entry.model ?? '',
+        masterBibleActive: Boolean(masterBible),
+        masterBibleSourceName: masterBible?.report.sourceName ?? '',
+        createdAt: now,
+        completedAt: entry.phase === 'start' ? '' : now,
+      });
+    },
+    [firebaseUser, masterBible]
+  );
+
+  const activeDevotionalRunRef = useRef<string | null>(null);
+  const handleDevotionalResearchEvent = useCallback(
+    (phase: 'start' | 'done' | 'error', detail: string) => {
+      if (phase === 'start') {
+        activeDevotionalRunRef.current = `l1_devotional_${Date.now().toString(36)}`;
+      }
+      const runId = activeDevotionalRunRef.current ?? `l1_devotional_${Date.now().toString(36)}`;
+      const agentIds: AgentId[] = ['trend-researcher', 'bible-researcher'];
+      for (const agentId of agentIds) {
+        const identity = getFloorEmployeeIdentity(1, agentId);
+        appendFloorWorkHistory({
+          id: runId,
+          floorId: 1,
+          phase: phase === 'done' ? 'completed' : phase,
+          eventType: 'devotional-research',
+          title: detail.slice(0, 220),
+          projectId: runId,
+          runId,
+          taskId: `${runId}_${agentId}`,
+          agentId,
+          agentName: identity.name,
+          stageId: 'devotional-research',
+          stageTitle: phase === 'start' ? 'Riset renungan dimulai' : phase === 'done' ? 'Riset renungan selesai' : 'Riset renungan gagal',
+          input: phase === 'start' ? detail : '',
+          output: phase === 'done' ? detail : '',
+          error: phase === 'error' ? detail : '',
+          detail,
+        });
+      }
+
+      if (phase === 'start') {
+        viewportRef.current?.startAgentTask(1, 'trend-researcher', `${runId}_t`, detail);
+        viewportRef.current?.startAgentTask(1, 'bible-researcher', `${runId}_b`, detail);
+        setActivityLog((prev) => appendActivityLog(prev, [
+          createStudioActivityEntry(`[L1] Riset Renungan Valid dimulai: ${detail}`),
+        ]));
+      } else if (phase === 'done') {
+        viewportRef.current?.finishAgentTask(1, 'trend-researcher', `${runId}_t`, true);
+        viewportRef.current?.finishAgentTask(1, 'bible-researcher', `${runId}_b`, true);
+        setActivityLog((prev) => appendActivityLog(prev, [
+          createStudioActivityEntry(`[L1] Renungan harian valid siap (2m 50d): ${detail}`),
+        ]));
+        activeDevotionalRunRef.current = null;
+      } else {
+        viewportRef.current?.finishAgentTask(1, 'trend-researcher', `${runId}_t`, false);
+        viewportRef.current?.finishAgentTask(1, 'bible-researcher', `${runId}_b`, false);
+        activeDevotionalRunRef.current = null;
+      }
+    },
+    [appendFloorWorkHistory]
+  );
+
   const handleOrchestratorStageEvent = useCallback((ev: OrchestratorStageEvent) => {
     const floorCfg = getFloorByChannelId(ev.channelId);
     const floorId = floorCfg.floorId;
-    const taskId = `pipeline_${ev.stageId}_${ev.agentId}`;
+    const runId = ev.runId ?? `pipeline_${Date.now().toString(36)}`;
+    const taskId = `${runId}_${ev.stageId}_${ev.agentId}`;
     const identity = getFloorEmployeeIdentity(floorId, ev.agentId);
+    appendFloorWorkHistory({
+      id: taskId,
+      floorId,
+      phase: ev.phase === 'done' ? 'completed' : ev.phase,
+      eventType: 'pipeline-stage',
+      title: ev.stageTitle,
+      projectId: runId,
+      runId,
+      taskId,
+      agentId: ev.agentId,
+      agentName: identity.name,
+      stageId: ev.stageId,
+      stageTitle: ev.stageTitle,
+      input: ev.phase === 'start' ? ev.detail ?? ev.stageTitle : '',
+      output: ev.phase === 'done' ? ev.detail ?? '' : '',
+      error: ev.phase === 'error' ? ev.detail ?? 'Tahap pipeline gagal.' : '',
+      detail: ev.detail ?? '',
+    });
 
     if (ev.phase === 'start') {
       viewportRef.current?.startAgentTask(floorId, ev.agentId, taskId, ev.stageTitle);
@@ -1178,7 +1327,7 @@ export default function App() {
         ])
       );
     }
-  }, []);
+  }, [appendFloorWorkHistory]);
 
   const handleCloseDivisionTool = useCallback(() => {
     setDivisionToolMode(null);
@@ -1317,7 +1466,33 @@ export default function App() {
         : ev.channelName.toLowerCase().includes('faith')
         ? 1
         : activeFloorId;
-      const taskId = `shorts_${Date.now()}`;
+      if (ev.phase === 'start') {
+        activeShortsRunRef.current = ev.runId ?? `shorts_${Date.now()}`;
+      }
+      const taskId = ev.runId ?? activeShortsRunRef.current ?? `shorts_${Date.now()}`;
+      const agentIds: AgentId[] = ['bible-researcher', 'scriptwriter', 'storyboard-artist', 'theological-guardian'];
+      for (const agentId of agentIds) {
+        const identity = getFloorEmployeeIdentity(floorId, agentId);
+        appendFloorWorkHistory({
+          id: taskId,
+          floorId,
+          phase: ev.phase === 'done' ? 'completed' : ev.phase,
+          eventType: 'shorts-production',
+          title: ev.title,
+          projectId: taskId,
+          runId: taskId,
+          taskId: `${taskId}_${agentId}`,
+          agentId,
+          agentName: identity.name,
+          stageId: 'shorts-production',
+          stageTitle: ev.phase === 'start' ? 'Produksi Shorts dimulai' : ev.phase === 'done' ? 'Produksi Shorts selesai' : 'Produksi Shorts gagal',
+          input: ev.phase === 'start' ? ev.title : '',
+          output: ev.phase === 'done' ? `Guardian: ${ev.guardianStatus ?? 'BELUM DICEK'}` : '',
+          error: ev.phase === 'error' ? 'Produksi Shorts gagal. Periksa tahap terakhir di log produksi.' : '',
+          detail: ev.guardianStatus ? `Guardian: ${ev.guardianStatus}` : ev.channelName,
+        });
+      }
+      if (ev.phase === 'done' || ev.phase === 'error') activeShortsRunRef.current = null;
       if (ev.phase === 'start') {
         viewportRef.current?.startAgentTask(floorId, 'bible-researcher', `${taskId}_b`, `Riset Alkitab: ${ev.title}`);
         viewportRef.current?.startAgentTask(floorId, 'scriptwriter', `${taskId}_s`, `Naskah Shorts: ${ev.title}`);
@@ -1349,7 +1524,7 @@ export default function App() {
         viewportRef.current?.finishAgentTask(floorId, 'theological-guardian', `${taskId}_g`, false);
       }
     },
-    [activeFloorId]
+    [activeFloorId, appendFloorWorkHistory]
   );
 
   const handleHandoffToMediaStudio = useCallback(
@@ -1497,6 +1672,12 @@ export default function App() {
         ...prev,
         [floorKey]: [newEntry, ...(prev[floorKey] ?? [])],
       }));
+      const identity = getFloorEmployeeIdentity(floorId, agentId);
+      appendFloorWorkHistory({
+        id: taskId, floorId, phase: 'start', eventType: 'agent-task', title: prompt.slice(0, 220),
+        projectId: taskId, runId: taskId, taskId, agentId, agentName: identity.name,
+        stageId: 'agent-task', stageTitle: 'Tugas agen dimulai', input: prompt,
+      });
 
       viewportRef.current?.startAgentTask(floorId, agentId, taskId, prompt);
 
@@ -1557,6 +1738,12 @@ export default function App() {
               if (firebaseUser) {
                 void syncAgentTaskToFirestore(firebaseUser.uid, completedOllamaEntry);
               }
+              appendFloorWorkHistory({
+                id: taskId, floorId, phase: 'completed', eventType: 'agent-task', title: prompt.slice(0, 220),
+                projectId: taskId, runId: taskId, taskId, agentId, agentName: identity.name,
+                stageId: 'agent-task', stageTitle: 'Tugas agen selesai', input: prompt, output: text,
+                provider: 'ollama', model: providerConfig.ollama.model,
+              });
               viewportRef.current?.finishAgentTask(floorId, agentId, taskId, true);
               return;
             }
@@ -1573,6 +1760,12 @@ export default function App() {
                 t.id === taskId ? { ...t, status: 'error', error: errMessage } : t
               ),
             }));
+            appendFloorWorkHistory({
+              id: taskId, floorId, phase: 'error', eventType: 'agent-task', title: prompt.slice(0, 220),
+              projectId: taskId, runId: taskId, taskId, agentId, agentName: identity.name,
+              stageId: 'agent-task', stageTitle: 'Tugas Ollama gagal', input: prompt, error: errMessage,
+              provider: 'ollama', model: providerConfig.ollama.model,
+            });
             viewportRef.current?.finishAgentTask(floorId, agentId, taskId, false);
             return;
           }
@@ -1608,6 +1801,11 @@ export default function App() {
 
         if (!response.ok || !data.output) {
           const errMessage = data.error || 'Gagal mendapatkan respons dari agen AI.';
+          appendFloorWorkHistory({
+            id: taskId, floorId, phase: 'error', eventType: 'agent-task', title: prompt.slice(0, 220),
+            projectId: taskId, runId: taskId, taskId, agentId, agentName: getFloorEmployeeIdentity(floorId, agentId).name,
+            stageId: 'agent-task', stageTitle: 'Tugas agen gagal', input: prompt, error: errMessage,
+          });
           setTasksByFloorAgent((prev) => ({
             ...prev,
             [floorKey]: (prev[floorKey] ?? []).map((t) =>
@@ -1638,9 +1836,20 @@ export default function App() {
         if (firebaseUser) {
           void syncAgentTaskToFirestore(firebaseUser.uid, completedEntry);
         }
+        appendFloorWorkHistory({
+          id: taskId, floorId, phase: 'completed', eventType: 'agent-task', title: prompt.slice(0, 220),
+          projectId: taskId, runId: taskId, taskId, agentId, agentName: getFloorEmployeeIdentity(floorId, agentId).name,
+          stageId: 'agent-task', stageTitle: 'Tugas agen selesai', input: prompt, output: data.output,
+          provider: data.providerUsed ?? '', model: data.modelUsed ?? '',
+        });
         viewportRef.current?.finishAgentTask(floorId, agentId, taskId, true);
       } catch {
         const errMessage = 'Koneksi ke server tugas agen AI terputus.';
+        appendFloorWorkHistory({
+          id: taskId, floorId, phase: 'error', eventType: 'agent-task', title: prompt.slice(0, 220),
+          projectId: taskId, runId: taskId, taskId, agentId, agentName: getFloorEmployeeIdentity(floorId, agentId).name,
+          stageId: 'agent-task', stageTitle: 'Koneksi tugas agen gagal', input: prompt, error: errMessage,
+        });
         setTasksByFloorAgent((prev) => ({
           ...prev,
           [floorKey]: (prev[floorKey] ?? []).map((t) =>
@@ -1650,7 +1859,7 @@ export default function App() {
         viewportRef.current?.finishAgentTask(floorId, agentId, taskId, false);
       }
     },
-    [providerConfig, firebaseUser, masterBible]
+    [providerConfig, firebaseUser, masterBible, appendFloorWorkHistory]
   );
 
   const handleSubmitSpecialistTask = useCallback(
@@ -1726,6 +1935,8 @@ export default function App() {
         onAgentClicked={handleAgentClicked}
       />
 
+      <YoutubeOAuthCallback />
+
       <OfficeHUD
         buildingState={buildingState}
         floorView={floorView}
@@ -1738,6 +1949,7 @@ export default function App() {
         simSpeed={simSpeed}
         selectedTarget={selectedTarget}
         tasksByFloorAgent={tasksByFloorAgent}
+        workHistory={workHistory}
         mediaStudioOpen={mediaStudioOpen}
         mediaStudioPrefill={mediaStudioPrefill}
         mediaItems={mediaItems}

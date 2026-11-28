@@ -38,7 +38,7 @@ import type {
   SpecialistAgentProfile,
 } from '../office/agentRoster';
 import type { FirestoreSyncStatus } from '../firebase/client';
-import type { FirebaseAuthUserSummary } from '../firebase/officeSync';
+import type { FirebaseAuthUserSummary, WorkHistoryRecord } from '../firebase/officeSync';
 import type { ProviderConfig } from '../office/providerConfig';
 import { ActivityLogPanel } from './ActivityLogPanel';
 import { AgentRosterDrawer } from './AgentRosterDrawer';
@@ -78,6 +78,7 @@ interface OfficeHUDProps {
   simSpeed: number;
   selectedTarget: { floorId: FloorId; agentId: AgentId } | null;
   tasksByFloorAgent: Record<string, TaskEntry[]>;
+  workHistory: WorkHistoryRecord[];
   mediaStudioOpen: boolean;
   mediaStudioPrefill: MediaStudioPrefill | null;
   mediaItems: GeneratedMediaItem[];
@@ -206,6 +207,7 @@ export function OfficeHUD({
   simSpeed,
   selectedTarget,
   tasksByFloorAgent,
+  workHistory,
   mediaStudioOpen,
   mediaStudioPrefill,
   mediaItems,
@@ -414,6 +416,7 @@ export function OfficeHUD({
               activeFloorId={activeFloorId}
               lighting={lighting}
               tasksByFloorAgent={tasksByFloorAgent}
+              workHistory={workHistory}
               shortsQueue={shortsQueue}
               onSelectFloor={(fid) => onSelectFloorView(fid)}
               onFocusEmployeeIn3D={(fid, id) => onSelectAgent(fid, id)}
@@ -544,6 +547,7 @@ export function OfficeHUD({
             shortsFactoryOpen && (
               <ShortsFactoryDrawer
                 lighting={lighting}
+                masterBible={masterBible}
                 queue={shortsQueue}
                 channelTemplates={channelTemplates}
                 externalTab={shortsFactoryTab}
