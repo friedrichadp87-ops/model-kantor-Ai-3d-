@@ -35,6 +35,79 @@ match /users/{userId}/masterBibleChunks/{chunkId} {
   allow read, write: if request.auth != null && request.auth.uid == userId;
 }`;
 
+export interface WorkHistoryRecord {
+  id: string;
+  ownerUid: string;
+  floorId: 1 | 2 | 3;
+  floorName: string;
+  channelId: ShortsChannelId;
+  channelName: string;
+  projectId: string;
+  runId: string;
+  taskId: string;
+  agentId: AgentId | string;
+  agentName: string;
+  stageId: string;
+  stageTitle: string;
+  eventType: string;
+  phase: 'start' | 'completed' | 'error' | 'warning';
+  title: string;
+  input: string;
+  output: string;
+  error: string;
+  detail: string;
+  provider: string;
+  model: string;
+  masterBibleActive: boolean;
+  masterBibleSourceName: string;
+  createdAt: string;
+  completedAt: string;
+}
+
+export function sanitizeWorkHistoryRecord(
+  ownerUid: string,
+  input: Omit<WorkHistoryRecord, 'ownerUid'>
+): WorkHistoryRecord {
+  const floorId = input.floorId === 2 || input.floorId === 3 ? input.floorId : 1;
+  const channelId: ShortsChannelId =
+    input.channelId === 'bible-stories-3d' ||
+    input.channelId === 'bible-facts-mysteries'
+      ? input.channelId
+      : 'daily-faith-inspiration';
+  const phase =
+    input.phase === 'completed' || input.phase === 'error' || input.phase === 'warning'
+      ? input.phase
+      : 'start';
+  return {
+    id: clampString(input.id, 140),
+    ownerUid: clampString(ownerUid, 128),
+    floorId,
+    floorName: clampString(input.floorName, 100),
+    channelId,
+    channelName: clampString(input.channelName, 120),
+    projectId: clampString(input.projectId, 140),
+    runId: clampString(input.runId, 140),
+    taskId: clampString(input.taskId, 140),
+    agentId: clampString(String(input.agentId ?? ''), 80),
+    agentName: clampString(input.agentName, 120),
+    stageId: clampString(input.stageId, 100),
+    stageTitle: clampString(input.stageTitle, 180),
+    eventType: clampString(input.eventType, 100),
+    phase,
+    title: clampString(input.title, 240),
+    input: clampString(input.input, 10_000),
+    output: clampString(input.output, 18_000),
+    error: clampString(input.error, 4_000),
+    detail: clampString(input.detail, 4_000),
+    provider: clampString(input.provider, 80),
+    model: clampString(input.model, 120),
+    masterBibleActive: Boolean(input.masterBibleActive),
+    masterBibleSourceName: clampString(input.masterBibleSourceName, 200),
+    createdAt: clampString(input.createdAt, 64),
+    completedAt: clampString(input.completedAt, 64),
+  };
+}
+
 export interface FirebaseAuthUserSummary {
   uid: string;
   email: string | null;
