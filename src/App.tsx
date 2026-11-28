@@ -18,6 +18,8 @@ import {
   loadMasterBibleFromFirestore,
   subscribeAuthUser,
   subscribeShortsQueue,
+  subscribeWorkHistory,
+  appendWorkHistoryToFirestore,
   subscribeWorkspaceSettings,
   syncAgentTaskToFirestore,
   syncMasterBibleToFirestore,
@@ -27,7 +29,7 @@ import {
   testFirestoreConnection,
   type FirestoreSyncStatus,
 } from './firebase/client';
-import type { FirebaseAuthUserSummary } from './firebase/officeSync';
+import type { FirebaseAuthUserSummary, WorkHistoryRecord } from './firebase/officeSync';
 import {
   appendActivityLog,
   createInitialActivityLog,
@@ -123,6 +125,7 @@ function createInitialFloorTasksMap(): Record<string, TaskEntry[]> {
 
 export default function App() {
   const viewportRef = useRef<OfficeViewportHandle | null>(null);
+  const activeShortsRunRef = useRef<string | null>(null);
 
   const initialBuilding = useRef<BuildingSimulationState | null>(null);
   if (!initialBuilding.current) {
@@ -198,6 +201,7 @@ export default function App() {
   const [tasksByFloorAgent, setTasksByFloorAgent] = useState<Record<string, TaskEntry[]>>(
     createInitialFloorTasksMap
   );
+  const [workHistory, setWorkHistory] = useState<WorkHistoryRecord[]>([]);
   const [firebaseUser, setFirebaseUser] = useState<FirebaseAuthUserSummary | null>(null);
   const [firebaseAuthLoading, setFirebaseAuthLoading] = useState<boolean>(true);
   const [firebaseModalOpen, setFirebaseModalOpen] = useState<boolean>(false);
@@ -246,6 +250,8 @@ export default function App() {
           ])
         );
       } else {
+        setWorkHistory([]);
+        clearApiMasterBibleCache();
         setFirebaseSyncStatus((prev) => ({
           ...prev,
           state: 'idle',
@@ -366,6 +372,8 @@ export default function App() {
       handleSubError
     );
 
+    const unsubHistory = subscribeWorkHistory(uid, setWorkHistory, handleSubError);
+
     const unsubQueue = subscribeShortsQueue(
       uid,
       (items) => {
@@ -443,6 +451,7 @@ export default function App() {
       bibleSyncActive = false;
       unsubSettings();
       unsubQueue();
+      unsubHistory();
     };
   }, [firebaseUser]);
 
@@ -1142,11 +1151,86 @@ export default function App() {
     setActiveDivision('pengaturan');
   }, []);
 
+  const appendFloorWorkHistory = useCallback(
+    (entry: {
+      id: string;
+      floorId: FloorId;
+      phase: 'start' | 'completed' | 'error' | 'warning';
+      eventType: string;
+      title: string;
+      agentId?: string;
+      agentName?: string;
+      projectId?: string;
+      runId?: string;
+      taskId?: string;
+      stageId?: string;
+      stageTitle?: string;
+      input?: string;
+      output?: string;
+      error?: string;
+      detail?: string;
+      provider?: string;
+      model?: string;
+    }) => {
+      if (!firebaseUser) return;
+      const floorCfg = BUILDING_FLOORS[entry.floorId];
+      const now = new Date().toISOString();
+      const uniqueId = `${entry.id}_${entry.phase}_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
+      void appendWorkHistoryToFirestore(firebaseUser.uid, {
+        id: uniqueId,
+        floorId: entry.floorId,
+        floorName: floorCfg.label,
+        channelId: floorCfg.channelId,
+        channelName: floorCfg.channelName,
+        projectId: entry.projectId ?? entry.runId ?? entry.taskId ?? entry.id,
+        runId: entry.runId ?? '',
+        taskId: entry.taskId ?? entry.id,
+        agentId: entry.agentId ?? '',
+        agentName: entry.agentName ?? '',
+        stageId: entry.stageId ?? '',
+        stageTitle: entry.stageTitle ?? '',
+        eventType: entry.eventType,
+        phase: entry.phase,
+        title: entry.title,
+        input: entry.input ?? '',
+        output: entry.output ?? '',
+        error: entry.error ?? '',
+        detail: entry.detail ?? '',
+        provider: entry.provider ?? '',
+        model: entry.model ?? '',
+        masterBibleActive: Boolean(masterBible),
+        masterBibleSourceName: masterBible?.report.sourceName ?? '',
+        createdAt: now,
+        completedAt: entry.phase === 'start' ? '' : now,
+      });
+    },
+    [firebaseUser, masterBible]
+  );
+
   const handleOrchestratorStageEvent = useCallback((ev: OrchestratorStageEvent) => {
     const floorCfg = getFloorByChannelId(ev.channelId);
     const floorId = floorCfg.floorId;
-    const taskId = `pipeline_${ev.stageId}_${ev.agentId}`;
+    const runId = ev.runId ?? `pipeline_${Date.now().toString(36)}`;
+    const taskId = `${runId}_${ev.stageId}_${ev.agentId}`;
     const identity = getFloorEmployeeIdentity(floorId, ev.agentId);
+    appendFloorWorkHistory({
+      id: taskId,
+      floorId,
+      phase: ev.phase === 'done' ? 'completed' : ev.phase,
+      eventType: 'pipeline-stage',
+      title: ev.stageTitle,
+      projectId: runId,
+      runId,
+      taskId,
+      agentId: ev.agentId,
+      agentName: identity.name,
+      stageId: ev.stageId,
+      stageTitle: ev.stageTitle,
+      input: ev.phase === 'start' ? ev.detail ?? ev.stageTitle : '',
+      output: ev.phase === 'done' ? ev.detail ?? '' : '',
+      error: ev.phase === 'error' ? ev.detail ?? 'Tahap pipeline gagal.' : '',
+      detail: ev.detail ?? '',
+    });
 
     if (ev.phase === 'start') {
       viewportRef.current?.startAgentTask(floorId, ev.agentId, taskId, ev.stageTitle);
@@ -1176,7 +1260,7 @@ export default function App() {
         ])
       );
     }
-  }, []);
+  }, [appendFloorWorkHistory]);
 
   const handleCloseDivisionTool = useCallback(() => {
     setDivisionToolMode(null);
@@ -1315,7 +1399,33 @@ export default function App() {
         : ev.channelName.toLowerCase().includes('faith')
         ? 1
         : activeFloorId;
-      const taskId = `shorts_${Date.now()}`;
+      if (ev.phase === 'start') {
+        activeShortsRunRef.current = `shorts_${Date.now()}`;
+      }
+      const taskId = activeShortsRunRef.current ?? `shorts_${Date.now()}`;
+      const agentIds: AgentId[] = ['bible-researcher', 'scriptwriter', 'storyboard-artist', 'theological-guardian'];
+      for (const agentId of agentIds) {
+        const identity = getFloorEmployeeIdentity(floorId, agentId);
+        appendFloorWorkHistory({
+          id: taskId,
+          floorId,
+          phase: ev.phase === 'done' ? 'completed' : ev.phase,
+          eventType: 'shorts-production',
+          title: ev.title,
+          projectId: taskId,
+          runId: taskId,
+          taskId: `${taskId}_${agentId}`,
+          agentId,
+          agentName: identity.name,
+          stageId: 'shorts-production',
+          stageTitle: ev.phase === 'start' ? 'Produksi Shorts dimulai' : ev.phase === 'done' ? 'Produksi Shorts selesai' : 'Produksi Shorts gagal',
+          input: ev.phase === 'start' ? ev.title : '',
+          output: ev.phase === 'done' ? `Guardian: ${ev.guardianStatus ?? 'BELUM DICEK'}` : '',
+          error: ev.phase === 'error' ? 'Produksi Shorts gagal. Periksa tahap terakhir di log produksi.' : '',
+          detail: ev.guardianStatus ? `Guardian: ${ev.guardianStatus}` : ev.channelName,
+        });
+      }
+      if (ev.phase === 'done' || ev.phase === 'error') activeShortsRunRef.current = null;
       if (ev.phase === 'start') {
         viewportRef.current?.startAgentTask(floorId, 'bible-researcher', `${taskId}_b`, `Riset Alkitab: ${ev.title}`);
         viewportRef.current?.startAgentTask(floorId, 'scriptwriter', `${taskId}_s`, `Naskah Shorts: ${ev.title}`);
@@ -1347,7 +1457,7 @@ export default function App() {
         viewportRef.current?.finishAgentTask(floorId, 'theological-guardian', `${taskId}_g`, false);
       }
     },
-    [activeFloorId]
+    [activeFloorId, appendFloorWorkHistory]
   );
 
   const handleHandoffToMediaStudio = useCallback(
@@ -1495,6 +1605,12 @@ export default function App() {
         ...prev,
         [floorKey]: [newEntry, ...(prev[floorKey] ?? [])],
       }));
+      const identity = getFloorEmployeeIdentity(floorId, agentId);
+      appendFloorWorkHistory({
+        id: taskId, floorId, phase: 'start', eventType: 'agent-task', title: prompt.slice(0, 220),
+        projectId: taskId, runId: taskId, taskId, agentId, agentName: identity.name,
+        stageId: 'agent-task', stageTitle: 'Tugas agen dimulai', input: prompt,
+      });
 
       viewportRef.current?.startAgentTask(floorId, agentId, taskId, prompt);
 
@@ -1555,6 +1671,12 @@ export default function App() {
               if (firebaseUser) {
                 void syncAgentTaskToFirestore(firebaseUser.uid, completedOllamaEntry);
               }
+              appendFloorWorkHistory({
+                id: taskId, floorId, phase: 'completed', eventType: 'agent-task', title: prompt.slice(0, 220),
+                projectId: taskId, runId: taskId, taskId, agentId, agentName: identity.name,
+                stageId: 'agent-task', stageTitle: 'Tugas agen selesai', input: prompt, output: text,
+                provider: 'ollama', model: providerConfig.ollama.model,
+              });
               viewportRef.current?.finishAgentTask(floorId, agentId, taskId, true);
               return;
             }
@@ -1571,6 +1693,12 @@ export default function App() {
                 t.id === taskId ? { ...t, status: 'error', error: errMessage } : t
               ),
             }));
+            appendFloorWorkHistory({
+              id: taskId, floorId, phase: 'error', eventType: 'agent-task', title: prompt.slice(0, 220),
+              projectId: taskId, runId: taskId, taskId, agentId, agentName: identity.name,
+              stageId: 'agent-task', stageTitle: 'Tugas Ollama gagal', input: prompt, error: errMessage,
+              provider: 'ollama', model: providerConfig.ollama.model,
+            });
             viewportRef.current?.finishAgentTask(floorId, agentId, taskId, false);
             return;
           }
@@ -1606,6 +1734,11 @@ export default function App() {
 
         if (!response.ok || !data.output) {
           const errMessage = data.error || 'Gagal mendapatkan respons dari agen AI.';
+          appendFloorWorkHistory({
+            id: taskId, floorId, phase: 'error', eventType: 'agent-task', title: prompt.slice(0, 220),
+            projectId: taskId, runId: taskId, taskId, agentId, agentName: getFloorEmployeeIdentity(floorId, agentId).name,
+            stageId: 'agent-task', stageTitle: 'Tugas agen gagal', input: prompt, error: errMessage,
+          });
           setTasksByFloorAgent((prev) => ({
             ...prev,
             [floorKey]: (prev[floorKey] ?? []).map((t) =>
@@ -1636,9 +1769,20 @@ export default function App() {
         if (firebaseUser) {
           void syncAgentTaskToFirestore(firebaseUser.uid, completedEntry);
         }
+        appendFloorWorkHistory({
+          id: taskId, floorId, phase: 'completed', eventType: 'agent-task', title: prompt.slice(0, 220),
+          projectId: taskId, runId: taskId, taskId, agentId, agentName: getFloorEmployeeIdentity(floorId, agentId).name,
+          stageId: 'agent-task', stageTitle: 'Tugas agen selesai', input: prompt, output: data.output,
+          provider: data.providerUsed ?? '', model: data.modelUsed ?? '',
+        });
         viewportRef.current?.finishAgentTask(floorId, agentId, taskId, true);
       } catch {
         const errMessage = 'Koneksi ke server tugas agen AI terputus.';
+        appendFloorWorkHistory({
+          id: taskId, floorId, phase: 'error', eventType: 'agent-task', title: prompt.slice(0, 220),
+          projectId: taskId, runId: taskId, taskId, agentId, agentName: getFloorEmployeeIdentity(floorId, agentId).name,
+          stageId: 'agent-task', stageTitle: 'Koneksi tugas agen gagal', input: prompt, error: errMessage,
+        });
         setTasksByFloorAgent((prev) => ({
           ...prev,
           [floorKey]: (prev[floorKey] ?? []).map((t) =>
@@ -1648,7 +1792,7 @@ export default function App() {
         viewportRef.current?.finishAgentTask(floorId, agentId, taskId, false);
       }
     },
-    [providerConfig, firebaseUser, masterBible]
+    [providerConfig, firebaseUser, masterBible, appendFloorWorkHistory]
   );
 
   const handleSubmitSpecialistTask = useCallback(
