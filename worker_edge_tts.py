@@ -6,7 +6,7 @@ Install:
 Run:
     set FIREBASE_PROJECT_ID=kantor-ai-agent-creator
     set FIREBASE_ALLOWED_UIDS=YOUR_FIREBASE_OWNER_UID
-    set GOOGLE_APPLICATION_CREDENTIALS=C:\\secure\\kantor-ai-firebase-admin.json
+    set GOOGLE_APPLICATION_CREDENTIALS=C:\secure\kantor-ai-firebase-admin.json
     py worker_edge_tts.py
 
 To mount into an existing FastAPI application:
@@ -76,7 +76,7 @@ def ensure_firebase_admin() -> firebase_admin.App:
 
 def get_bearer_token(request: Request) -> str:
     match = re.fullmatch(
-        r"Bearer\\s+(.+)",
+        r"Bearer\s+(.+)",
         request.headers.get("Authorization", ""),
         flags=re.IGNORECASE,
     )
@@ -114,7 +114,7 @@ async def verify_owner(request: Request) -> dict[str, Any]:
 
 def validate_rate(value: Any) -> str:
     raw = value if isinstance(value, str) else "-5%"
-    if not re.fullmatch(r"[+-]?(?:0|[1-2]?\\d|30)%", raw):
+    if not re.fullmatch(r"[+-]?(?:0|[1-2]?\d|30)%", raw):
         raise HTTPException(status_code=400, detail="Rate harus berada pada rentang -30% sampai +30%.")
     number = int(raw[:-1])
     if not -30 <= number <= 30:
@@ -124,7 +124,7 @@ def validate_rate(value: Any) -> str:
 
 def validate_pitch(value: Any) -> str:
     raw = value if isinstance(value, str) else "+0Hz"
-    if not re.fullmatch(r"[+-]?(?:0|[1]?\\d|20)Hz", raw):
+    if not re.fullmatch(r"[+-]?(?:0|[1]?\d|20)Hz", raw):
         raise HTTPException(status_code=400, detail="Pitch harus berada pada rentang -20Hz sampai +20Hz.")
     number = int(raw[:-2])
     if not -20 <= number <= 20:
