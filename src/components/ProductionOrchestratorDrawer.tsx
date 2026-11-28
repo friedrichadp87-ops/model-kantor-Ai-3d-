@@ -662,7 +662,7 @@ export function ProductionOrchestratorDrawer({
       // ---------------------------------------------------------------
       let narrationAudioDataUrl: string | undefined = editorNarrationAudioUrl ?? undefined;
       if (input.generateAudio) {
-        updateStage('narration_audio', 'running', 'Mensintesis suara narasi ElevenLabs...');
+        updateStage('narration_audio', 'running', providerConfig.voiceProvider === 'edge-tts' ? 'Membuat audio narasi melalui Edge-TTS Windows Worker...' : 'Mensintesis suara narasi ElevenLabs...');
         runStageEvent(bp, 'narration_audio', 'start');
         try {
           if (providerConfig.voiceProvider === 'edge-tts') {
@@ -733,14 +733,11 @@ export function ProductionOrchestratorDrawer({
             runStageEvent(bp, 'narration_audio', 'done');
           }
           }
-        } catch {
+        } catch (error) {
           if (controller.signal.aborted) return;
-          updateStage(
-            'narration_audio',
-            'warning',
-            'Audio dilewati sementara; dapat diulang kapan saja.'
-          );
-          runStageEvent(bp, 'narration_audio', 'done');
+          const note = error instanceof Error ? error.message : 'Audio gagal dibuat; dapat dicoba kembali.';
+          updateStage('narration_audio', 'warning', note);
+          runStageEvent(bp, 'narration_audio', 'error', note);
         }
       } else {
         updateStage('narration_audio', 'warning', 'Narasi audio dinonaktifkan pada opsi perintah.');
