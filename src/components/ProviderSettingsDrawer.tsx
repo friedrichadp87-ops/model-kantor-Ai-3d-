@@ -1376,8 +1376,6 @@ export function ProviderSettingsDrawer({
             </div>
           </div>
         )}
-      </div>
-
         {activeTab === 'youtube' && (
           <YoutubeSettingsPanel lighting={lighting} signedIn={Boolean(firebaseUser)} />
         )}
