@@ -1,4 +1,4 @@
-import { auth, loadMasterBibleFromFirestore } from './client';
+import { appendWorkHistoryToFirestore, auth, loadMasterBibleFromFirestore } from './client';
 import { loadMasterBibleFromIndexedDb } from '../office/masterBibleStorage';
 import { buildMasterBibleSystemPolicy } from '../office/masterBible';
 import type { LocalBibleDatabase } from '../office/shortsFactory';
@@ -41,6 +41,103 @@ async function getMasterBible(uid: string): Promise<LocalBibleDatabase | null> {
     })();
   }
   return cachedBiblePromise;
+}
+
+
+type AuditFloorId = 1 | 2 | 3;
+
+function inferAuditFloor(pathname: string, body: Record<string, unknown>): AuditFloorId | null {
+  const floor = Number(body.floorId);
+  if (floor === 1 || floor === 2 || floor === 3) return floor;
+
+  const channelId = body.channelId;
+  if (channelId === 'daily-faith-inspiration') return 1;
+  if (channelId === 'bible-stories-3d') return 2;
+  if (channelId === 'bible-facts-mysteries') return 3;
+
+  if (pathname.includes('/devotional/')) return 1;
+  if (pathname.includes('/bible-stories/')) return 2;
+  if (pathname.includes('/bible-facts/')) return 3;
+  return null;
+}
+
+function auditSafeValue(value: unknown, depth = 0): unknown {
+  if (depth > 4) return '[nested data omitted]';
+  if (typeof value === 'string') return value.slice(0, 3500);
+  if (typeof value === 'number' || typeof value === 'boolean' || value === null) return value;
+  if (Array.isArray(value)) return value.slice(0, 15).map((item) => auditSafeValue(item, depth + 1));
+  if (value && typeof value === 'object') {
+    const result: Record<string, unknown> = {};
+    for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+      if (/(masterBible|dataUrl|base64|credential|apiKey|secret|token|audioData|videoData|imageData)/i.test(key)) {
+        continue;
+      }
+      result[key] = auditSafeValue(item, depth + 1);
+    }
+    return result;
+  }
+  return String(value).slice(0, 500);
+}
+
+function safeAuditJson(value: unknown, maxLength = 16_000): string {
+  try {
+    return JSON.stringify(auditSafeValue(value)).slice(0, maxLength);
+  } catch {
+    return '[response could not be serialized]';
+  }
+}
+
+function appendApiAuditEvent(
+  uid: string,
+  base: {
+    id: string;
+    floorId: AuditFloorId;
+    channelId: 'daily-faith-inspiration' | 'bible-stories-3d' | 'bible-facts-mysteries';
+    channelName: string;
+    path: string;
+    title: string;
+    input: string;
+    runId: string;
+    agentId: string;
+    masterBibleActive: boolean;
+    masterBibleSourceName: string;
+    phase: 'start' | 'completed' | 'error';
+    output?: string;
+    error?: string;
+    provider?: string;
+    model?: string;
+    createdAt: string;
+  }
+): void {
+  const floorName = base.floorId === 1 ? 'Lantai 1 · Daily Faith' :
+    base.floorId === 2 ? 'Lantai 2 · Bible Stories' : 'Lantai 3 · Bible Facts';
+  void appendWorkHistoryToFirestore(uid, {
+    id: base.id,
+    floorId: base.floorId,
+    floorName,
+    channelId: base.channelId,
+    channelName: base.channelName,
+    projectId: base.runId,
+    runId: base.runId,
+    taskId: base.id,
+    agentId: base.agentId,
+    agentName: base.agentId,
+    stageId: base.path,
+    stageTitle: base.path,
+    eventType: 'api-execution',
+    phase: base.phase,
+    title: base.title,
+    input: base.input,
+    output: base.output ?? '',
+    error: base.error ?? '',
+    detail: base.path,
+    provider: base.provider ?? '',
+    model: base.model ?? '',
+    masterBibleActive: base.masterBibleActive,
+    masterBibleSourceName: base.masterBibleSourceName,
+    createdAt: base.createdAt,
+    completedAt: base.phase === 'start' ? '' : new Date().toISOString(),
+  }).catch(() => undefined);
 }
 
 /**
@@ -128,8 +225,94 @@ export function installAuthenticatedApiFetch(): void {
     const nextInit: RequestInit = {
       ...init,
       headers: requestHeaders,
-      ...(nextBody !== undefined ? { body: nextBody } : {}),
+      ...(method !== 'GET' && method !== 'HEAD' && nextBody !== undefined ? { body: nextBody } : {}),
     };
-    return originalFetch(input, nextInit);
+
+    let auditBase: {
+      id: string;
+      floorId: AuditFloorId;
+      channelId: 'daily-faith-inspiration' | 'bible-stories-3d' | 'bible-facts-mysteries';
+      channelName: string;
+      path: string;
+      title: string;
+      input: string;
+      runId: string;
+      agentId: string;
+      masterBibleActive: boolean;
+      masterBibleSourceName: string;
+      phase: 'start' | 'completed' | 'error';
+      createdAt: string;
+    } | null = null;
+
+    if (method !== 'GET' && method !== 'HEAD') {
+      let auditBody: Record<string, unknown> = {};
+      if (typeof nextBody === 'string' && nextBody.length <= 1_000_000) {
+        try { auditBody = JSON.parse(nextBody) as Record<string, unknown>; } catch { /* keep minimal API log */ }
+      }
+      const floorId = inferAuditFloor(requestUrl.pathname, auditBody);
+      if (floorId) {
+        const channelId = floorId === 1 ? 'daily-faith-inspiration' :
+          floorId === 2 ? 'bible-stories-3d' : 'bible-facts-mysteries';
+        const channelName = floorId === 1 ? 'Daily Faith & Inspiration' :
+          floorId === 2 ? 'Bible Stories 3D' : 'Bible Facts & Mysteries';
+        const now = new Date().toISOString();
+        const id = `api_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+        const titleValue = auditBody.title ?? auditBody.topicHint ?? auditBody.command ??
+          auditBody.bookScope ?? auditBody.task ?? auditBody.prompt ?? auditBody.reference ??
+          auditBody.scopeLabel ?? requestUrl.pathname;
+        const safeInput = safeAuditJson(auditBody, 7000);
+        const runId = String(auditBody.runId ?? auditBody.projectId ?? auditBody.taskId ?? id).slice(0, 140);
+        const agentId = typeof auditBody.agentId === 'string' ? auditBody.agentId.slice(0, 80) : '';
+        const masterBibleActive = auditBody.masterBibleActive === true;
+        const masterBibleSourceName = typeof auditBody.masterBibleSourceName === 'string'
+          ? auditBody.masterBibleSourceName.slice(0, 200) : '';
+        auditBase = {
+          id, floorId, channelId, channelName, path: `${method} ${requestUrl.pathname}`,
+          title: String(titleValue).slice(0, 220), input: safeInput, runId, agentId,
+          masterBibleActive, masterBibleSourceName, phase: 'start', createdAt: now,
+        };
+        appendApiAuditEvent(user.uid, auditBase);
+      }
+    }
+
+    try {
+      const response = await originalFetch(input, nextInit);
+      if (auditBase) {
+        let payload: Record<string, unknown> = {};
+        const contentType = response.headers.get('content-type') ?? '';
+        if (contentType.toLowerCase().includes('application/json')) {
+          try {
+            payload = await response.clone().json() as Record<string, unknown>;
+          } catch {
+            payload = {};
+          }
+        }
+        const provider = typeof payload.providerUsed === 'string' ? payload.providerUsed : '';
+        const model = typeof payload.modelUsed === 'string' ? payload.modelUsed : '';
+        const error = typeof payload.error === 'string'
+          ? payload.error.slice(0, 3500)
+          : response.ok ? '' : `HTTP ${response.status} ${response.statusText}`;
+        appendApiAuditEvent(user.uid, {
+          ...auditBase,
+          id: `${auditBase.id}_${response.ok ? 'done' : 'error'}`,
+          phase: response.ok ? 'completed' : 'error',
+          output: response.ok ? safeAuditJson(payload) : '',
+          error,
+          provider,
+          model,
+        });
+      }
+      return response;
+    } catch (error) {
+      if (auditBase) {
+        appendApiAuditEvent(user.uid, {
+          ...auditBase,
+          id: `${auditBase.id}_network_error`,
+          phase: 'error',
+          error: error instanceof Error ? error.message : 'Network request failed.',
+        });
+      }
+      throw error;
+    }
   };
 }
