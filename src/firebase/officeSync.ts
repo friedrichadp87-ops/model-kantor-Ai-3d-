@@ -157,6 +157,7 @@ export interface SanitizedAgentTaskPayload {
 
 export interface SanitizedMasterBibleMetaPayload {
   ownerUid: string;
+  uploadId?: string;
   sourceName: string;
   publisher: string;
   year: string;
@@ -171,6 +172,7 @@ export interface SanitizedMasterBibleMetaPayload {
 
 export interface SanitizedMasterBibleChunkPayload {
   ownerUid: string;
+  uploadId?: string;
   chunkIndex: number;
   chunkCount: number;
   verseCount: number;
