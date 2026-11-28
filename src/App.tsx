@@ -1466,9 +1466,9 @@ export default function App() {
         ? 1
         : activeFloorId;
       if (ev.phase === 'start') {
-        activeShortsRunRef.current = `shorts_${Date.now()}`;
+        activeShortsRunRef.current = ev.runId ?? `shorts_${Date.now()}`;
       }
-      const taskId = activeShortsRunRef.current ?? `shorts_${Date.now()}`;
+      const taskId = ev.runId ?? activeShortsRunRef.current ?? `shorts_${Date.now()}`;
       const agentIds: AgentId[] = ['bible-researcher', 'scriptwriter', 'storyboard-artist', 'theological-guardian'];
       for (const agentId of agentIds) {
         const identity = getFloorEmployeeIdentity(floorId, agentId);
