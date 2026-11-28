@@ -269,7 +269,7 @@ export default function App() {
     };
   }, []);
 
-  // Hydrate building-wide Master Alkitab Terjemahan Baru (TB) from IndexedDB and sync to backend memory
+  // Hydrate a local offline copy of the building-wide Master Alkitab (Firestore remains authoritative).
   useEffect(() => {
     let active = true;
     void loadMasterBibleFromIndexedDb().then(async (saved) => {
@@ -283,7 +283,7 @@ export default function App() {
       setActivityLog((prev) =>
         appendActivityLog(prev, [
           createStudioActivityEntry(
-            `Master Alkitab TB aktif di L1, L2 & L3 (${saved.report.sourceName} · ${saved.report.indexedVerseCount.toLocaleString('id-ID')} ayat${outcome.mode === 'local-only' ? ' · Mode Lokal' : ''})`
+            `Master Alkitab TB tersedia sebagai salinan lokal offline di L1, L2 & L3 (${saved.report.sourceName} · ${saved.report.indexedVerseCount.toLocaleString('id-ID')} ayat)`
           ),
         ])
       );
