@@ -196,7 +196,7 @@ export function createDefaultProviderConfig(): ProviderConfig {
     gemini: {
       textModel: 'gemini-4-hydrogen',
     },
-    voiceProvider: 'elevenlabs',
+    voiceProvider: 'edge-tts',
     edgeTts: {
       workerUrl: 'http://127.0.0.1:8765',
       voice: 'id-ID-ArdiNeural',
@@ -279,7 +279,7 @@ export function mergeProviderConfig(raw: unknown): ProviderConfig {
     rate: typeof edgeRaw.rate === 'string' ? edgeRaw.rate : defaults.edgeTts.rate,
     pitch: typeof edgeRaw.pitch === 'string' ? edgeRaw.pitch : defaults.edgeTts.pitch,
   });
-  const voiceProvider: VoiceProvider = obj.voiceProvider === 'edge-tts' ? 'edge-tts' : 'elevenlabs';
+  const voiceProvider: VoiceProvider = obj.voiceProvider === 'elevenlabs' ? 'elevenlabs' : 'edge-tts';
 
   const elevenRaw = (obj.elevenlabs && typeof obj.elevenlabs === 'object'
     ? obj.elevenlabs
