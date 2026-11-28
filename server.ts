@@ -7,6 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { promisify } from 'node:util';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { verifyFirebaseIdToken, isAllowedFirebaseUid } from './src/server/firebaseIdToken.ts';
 import { validateImageRequest, validateVideoRequest } from './src/office/mediaStudio.ts';
 import {
   canMarkReadyToPublish,
@@ -15,20 +16,14 @@ import {
   extractIndonesianBibleReferences,
   formatTemplatePromptDirectives,
   getChannelById,
-  lookupLocalBibleReference,
   validateShortsBrief,
   type CareFlag,
   type GuardianReport,
   type GuardianVerdict,
-  type LocalBibleDatabase,
   type PastoralReport,
   type ShortsChannelId,
   type ShortsDuration,
 } from './src/office/shortsFactory.ts';
-import {
-  buildMasterBibleSystemPolicy,
-  parseMasterBibleContent,
-} from './src/office/masterBible.ts';
 import { getSpecialistById } from './src/office/agentRoster.ts';
 import {
   mergeProviderConfig,
@@ -81,6 +76,50 @@ const __dirname = path.dirname(__filename);
 
 const PORT = Number(process.env.PORT) || 3000;
 const isProduction = process.env.NODE_ENV === 'production';
+
+const FALLBACK_MASTER_BIBLE_CONTEXT = [
+  'ATURAN MUTLAK SUMBER UTAMA ALKITAB (BERLAKU DI SELURUH LANTAI 1, 2 & 3 KANTOR AI 3D):',
+  'Alkitab Terjemahan Baru (TB) yang diunggah pemilik adalah sumber utama untuk semua pekerjaan yang memakai rujukan Alkitab.',
+  'Jangan pernah mengarang kutipan ayat. Bila kutipan verbatim tidak tersedia dari Master Alkitab Firestore, nyatakan bahwa rujukan perlu diverifikasi dan jangan mengklaim kutipan berasal dari TB.',
+].join('\\n');
+
+function masterBibleRecord(input: unknown): Record<string, unknown> {
+  return input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
+}
+
+function getMasterBibleContext(input: unknown): string {
+  const value = masterBibleRecord(input).masterBibleContext;
+  return typeof value === 'string' && value.trim()
+    ? value.trim().slice(0, 35_000)
+    : FALLBACK_MASTER_BIBLE_CONTEXT;
+}
+
+function getMasterBibleVerses(input: unknown, reference?: string): Array<{ ref: string; text: string }> {
+  const value = masterBibleRecord(input).masterBibleVerses;
+  if (!Array.isArray(value)) return [];
+  const verses = value
+    .slice(0, 24)
+    .map((item) => {
+      const row = masterBibleRecord(item);
+      return {
+        ref: typeof row.ref === 'string' ? row.ref.slice(0, 100) : '',
+        text: typeof row.text === 'string' ? row.text.slice(0, 1800) : '',
+      };
+    })
+    .filter((item) => item.ref && item.text);
+  if (!reference?.trim()) return verses;
+  const normalized = reference.trim().toLocaleLowerCase('id-ID').replace(/\\s+/g, ' ');
+  const matched = verses.filter((item) => {
+    const ref = item.ref.toLocaleLowerCase('id-ID').replace(/\\s+/g, ' ');
+    return ref === normalized || normalized.startsWith(ref) || ref.startsWith(normalized);
+  });
+  return matched.length ? matched : verses.slice(0, 4);
+}
+
+function isMasterBibleActive(input: unknown): boolean {
+  return masterBibleRecord(input).masterBibleActive === true;
+}
+
 
 function resolveGeminiKeyForChannel(channelId?: ShortsChannelId): {
   apiKey: string;
@@ -289,7 +328,7 @@ function mapGeminiApiError(err: unknown, fallbackLabel: string): { statusCode: n
 export function createApiApp(): express.Express {
   const app = express();
   const defaultJsonParser = express.json({ limit: '15mb' });
-  let masterBibleStore: LocalBibleDatabase | null = null;
+  const apiRateWindows = new Map<string, { startedAt: number; count: number }>();
 
   // Normalize Netlify Functions URL prefix (/.netlify/functions/api/...) so all /api/* routes match identically
   app.use((req, _res, next) => {
@@ -300,83 +339,58 @@ export function createApiApp(): express.Express {
     next();
   });
 
+  // Provider-backed and state-changing routes require a valid Firebase session.
+  // Health/version probes are deliberately public and return no private user data.
+  app.use('/api', async (req, res, next) => {
+    if (req.method === 'GET' && (req.path === '/health' || req.path === '/pwa/remote-version')) {
+      next();
+      return;
+    }
+
+    const match = /^Bearer\\s+(.+)$/i.exec(req.header('authorization') ?? '');
+    if (!match) {
+      res.status(401).json({ error: 'Autentikasi Firebase diperlukan untuk menggunakan API ini.' });
+      return;
+    }
+
+    try {
+      const claims = await verifyFirebaseIdToken(match[1].trim());
+      if (!isAllowedFirebaseUid(claims.sub)) {
+        res.status(403).json({ error: 'Akun Firebase ini tidak diizinkan menggunakan API Kantor AI.' });
+        return;
+      }
+
+      const now = Date.now();
+      const current = apiRateWindows.get(claims.sub);
+      if (!current || now - current.startedAt >= 60_000) {
+        apiRateWindows.set(claims.sub, { startedAt: now, count: 1 });
+      } else if (++current.count > 120) {
+        res.status(429).json({ error: 'Batas sementara 120 permintaan API per menit tercapai. Coba kembali sebentar lagi.' });
+        return;
+      }
+
+      res.locals.firebaseUid = claims.sub;
+      res.locals.firebaseEmail = typeof claims.email === 'string' ? claims.email : null;
+      next();
+    } catch {
+      res.status(401).json({ error: 'Token Firebase tidak valid atau kedaluwarsa. Silakan masuk kembali.' });
+    }
+  });
+
   app.use((req, res, next) => {
-    if (req.path === '/api/pipeline/assemble-video' || req.path === '/api/bible/master') {
+    if (req.path === '/api/pipeline/assemble-video') {
       next();
       return;
     }
     defaultJsonParser(req, res, next);
   });
 
-  // Master Alkitab Terjemahan Baru (TB) — Sumber Utama Wajib Seluruh Lantai (L1, L2, L3)
-  app.get('/api/bible/master/status', (_req, res) => {
-    res.json({
-      loaded: Boolean(masterBibleStore && masterBibleStore.report.indexedVerseCount > 0),
-      report: masterBibleStore?.report ?? null,
+  // Master Bible is never held in serverless memory. The authenticated client reads
+  // the user's Firestore Master Bible and supplies only the relevant policy/verse context.
+  app.all('/api/bible/master', (_req, res) => {
+    res.status(410).json({
+      error: 'Penyimpanan Master Alkitab di memori server sudah dihentikan. Gunakan Master Alkitab Firestore.',
     });
-  });
-
-  app.post('/api/bible/master', express.json({ limit: '50mb' }), (req, res) => {
-    const body = req.body as
-      | {
-          rawText?: string;
-          fileName?: string;
-          database?: LocalBibleDatabase;
-        }
-      | undefined;
-
-    try {
-      if (
-        body?.database &&
-        body.database.versesMap &&
-        typeof body.database.versesMap === 'object' &&
-        body.database.report &&
-        body.database.report.indexedVerseCount > 0
-      ) {
-        masterBibleStore = body.database;
-      } else if (typeof body?.rawText === 'string' && body.rawText.trim().length > 0) {
-        masterBibleStore = parseMasterBibleContent(body.rawText, String(body.fileName ?? ''));
-      } else {
-        res.status(400).json({
-          error: 'Kirimkan isi file Alkitab Terjemahan Baru (.json atau .txt) yang valid.',
-        });
-        return;
-      }
-
-      res.json({
-        ok: true,
-        loaded: true,
-        report: masterBibleStore.report,
-      });
-    } catch (err) {
-      res.status(400).json({
-        error:
-          err instanceof Error
-            ? err.message
-            : 'Gagal memproses file Master Alkitab Terjemahan Baru.',
-      });
-    }
-  });
-
-  app.post('/api/bible/master/lookup', (req, res) => {
-    const body = req.body as { reference?: string } | undefined;
-    const reference = String(body?.reference ?? '').trim();
-    if (!reference) {
-      res.status(400).json({ error: 'Masukkan referensi ayat (contoh: Mazmur 27:14).' });
-      return;
-    }
-    if (!masterBibleStore) {
-      res.status(404).json({
-        error: 'Master Alkitab Terjemahan Baru belum diunggah. Unggah file TB terlebih dahulu.',
-      });
-      return;
-    }
-    res.json(lookupLocalBibleReference(masterBibleStore.versesMap, reference));
-  });
-
-  app.delete('/api/bible/master', (_req, res) => {
-    masterBibleStore = null;
-    res.json({ ok: true, loaded: false });
   });
 
   // Lantai 1 Daily Faith & Inspiration — Riset Sumber Renungan Harian Valid (LAI / Sumber Terpercaya) via Google Search Grounding
@@ -391,10 +405,7 @@ export function createApiApp(): express.Express {
       year: 'numeric',
     }).format(new Date());
 
-    const biblePolicy = buildMasterBibleSystemPolicy(
-      masterBibleStore,
-      topicHint || 'Renungan harian Alkitab'
-    );
+    const biblePolicy = { policyBlock: getMasterBibleContext(body) };
 
     const systemInstruction = `Kamu adalah Tim Riset Renungan Harian Lantai 1 (Daily Faith & Inspiration) di Kantor AI 3D.
 Tugasmu mencari dan menyusun ringkasan tema renungan harian Kristen yang VALID, alkitabiah, dan memberkati untuk hari ini (${todayWib}), memprioritaskan sumber terpercaya seperti Lembaga Alkitab Indonesia (LAI / alkitab.or.id), Sabda.org, atau renungan harian gerejawi yang sah.
@@ -471,9 +482,7 @@ PERINTAH_PRODUKSI: <1 paragraf instruksi siap eksekusi untuk membuat renungan 2 
         }
       }
 
-      const matchedMasterVerses = masterBibleStore
-        ? lookupLocalBibleReference(masterBibleStore.versesMap, bibleReference).verses
-        : [];
+      const matchedMasterVerses = getMasterBibleVerses(body, bibleReference);
 
       res.json({
         dateLabel: todayWib,
@@ -485,7 +494,7 @@ PERINTAH_PRODUKSI: <1 paragraf instruksi siap eksekusi untuk membuat renungan 2 
         recommendedCommand,
         sourceLinks: sourceLinks.slice(0, 5),
         matchedMasterVerses,
-        masterBibleActive: Boolean(masterBibleStore),
+        masterBibleActive: isMasterBibleActive(body),
         keySlotUsed,
         researchedAt: new Date().toISOString(),
       });
@@ -881,7 +890,7 @@ PERINTAH_PRODUKSI: <1 paragraf instruksi siap eksekusi untuk membuat renungan 2 
       specialty: `${specialist.summary}. Tanggung jawab: ${specialist.responsibilities.join(' ')}`,
     };
 
-    const biblePolicy = buildMasterBibleSystemPolicy(masterBibleStore, task);
+    const biblePolicy = { policyBlock: getMasterBibleContext(body) };
     const systemInstruction =
       `Kamu adalah ${persona.name}, menjabat sebagai ${persona.role} di ${floorCfg.label} (${floorCfg.channelName} — ${floorCfg.subtitle}) pada Menara Kantor AI 3D. ` +
       `Fokus kerjamu: ${persona.specialty} ` +
@@ -1379,10 +1388,7 @@ PERINTAH_PRODUKSI: <1 paragraf instruksi siap eksekusi untuk membuat renungan 2 
           })}`
         : '';
 
-    const serverBiblePolicy = buildMasterBibleSystemPolicy(
-      masterBibleStore,
-      `${title} ${bibleReference} ${notes}`
-    );
+    const serverBiblePolicy = { policyBlock: getMasterBibleContext(body) };
 
     const systemInstruction = `Kamu adalah Pabrik Konten YouTube Multi-Agen berbahasa Indonesia untuk 3 channel Kristen:
 1. Bible Stories 3D (cerita Alkitab animasi 3D ramah anak & keluarga, Made for Kids)
@@ -1864,7 +1870,7 @@ Kembalikan HANYA JSON valid:
       res.json({
         plan: basePlan,
         aiEnriched: false,
-        masterBibleActive: Boolean(masterBibleStore),
+        masterBibleActive: isMasterBibleActive(body),
         keySlotUsed: resolveGeminiKeyForChannel('bible-stories-3d').keySlotUsed,
       });
       return;
@@ -1873,7 +1879,7 @@ Kembalikan HANYA JSON valid:
     try {
       const { ai, keySlotUsed } = createGeminiClientWithMeta('bible-stories-3d');
       const refListText = basePlan.episodes.map((ep) => ep.reference).join(', ');
-      const biblePolicy = buildMasterBibleSystemPolicy(masterBibleStore, refListText);
+      const biblePolicy = { policyBlock: getMasterBibleContext(body) };
 
       const systemInstruction = `Kamu adalah Tim Perencana Cerita Alkitab Lantai 2 (Bible Stories 3D).
 Tugasmu menyusun rencana detail episode berdasarkan aturan MUTLAK:
@@ -1948,7 +1954,7 @@ ${basePlan.episodes
           episodes: mergedEpisodes,
         },
         aiEnriched: true,
-        masterBibleActive: Boolean(masterBibleStore),
+        masterBibleActive: isMasterBibleActive(body),
         keySlotUsed,
       });
     } catch (err) {
@@ -1976,10 +1982,7 @@ ${basePlan.episodes
       BIBLE_FACT_CATEGORIES.find((c) => c.id === category) ?? BIBLE_FACT_CATEGORIES[0];
     const topicHint = String(body?.topicHint ?? '').trim().slice(0, 180);
 
-    const biblePolicy = buildMasterBibleSystemPolicy(
-      masterBibleStore,
-      topicHint || catMeta.exampleTopic
-    );
+    const biblePolicy = { policyBlock: getMasterBibleContext(body) };
 
     const systemInstruction = `Kamu adalah Tim Riset Fakta Alkitab & Misteri di Lantai 3 (Bible Facts & Mysteries).
 Tugasmu mencari fakta Alkitab yang akurat, bertanggung jawab, dan jarang diketahui orang, mencakup:
@@ -2046,9 +2049,7 @@ Kembalikan HANYA JSON valid (tanpa markdown codefence):
       }
 
       const bibleReference = String(parsed.bibleReference ?? '2 Samuel 7:12-16').trim();
-      const matchedMasterVerses = masterBibleStore
-        ? lookupLocalBibleReference(masterBibleStore.versesMap, bibleReference).verses.slice(0, 4)
-        : [];
+      const matchedMasterVerses = getMasterBibleVerses(body, bibleReference).slice(0, 4);
 
       const title = String(parsed.title ?? `Fakta Alkitab: ${topicHint || catMeta.label}`).trim();
       const visualReconstructionBrief =
@@ -2077,7 +2078,7 @@ Kembalikan HANYA JSON valid (tanpa markdown codefence):
         recommendedCommand,
         sourceLinks: sourceLinks.slice(0, 5),
         matchedMasterVerses,
-        masterBibleActive: Boolean(masterBibleStore),
+        masterBibleActive: isMasterBibleActive(body),
         keySlotUsed,
       });
     } catch (err) {
@@ -2119,10 +2120,7 @@ Kembalikan HANYA JSON valid (tanpa markdown codefence):
         ? formatTemplatePromptDirectives(body.channelTemplate as never)
         : '';
 
-    const serverBiblePolicy = buildMasterBibleSystemPolicy(
-      masterBibleStore,
-      `${input.bookScope} ${input.command}`
-    );
+    const serverBiblePolicy = { policyBlock: getMasterBibleContext(body) };
     const isDailyFaithLongDevotional =
       input.channelId === 'daily-faith-inspiration' && input.durationSeconds === 170;
     const isBibleStoriesChapter = input.channelId === 'bible-stories-3d';
@@ -2924,10 +2922,7 @@ Perintah Pemilik Studio: ${input.command}`;
         }))
       : [];
 
-    const qcBiblePolicy = buildMasterBibleSystemPolicy(
-      masterBibleStore,
-      `${JSON.stringify(body?.storyPlan ?? {})} ${JSON.stringify(body?.scriptArc ?? {})}`
-    );
+    const qcBiblePolicy = { policyBlock: getMasterBibleContext(body) };
     const systemInstruction = `Kamu adalah Tim Quality Control Akhir (Theological Guardian + Pastoral Sensitivity Checker + SEO Publisher) untuk channel "${channel.name}".
 Audit kesesuaian hasil akhir produksi terhadap rencana cerita/renungan Alkitab awal, kesetiaan mutlak pada Alkitab Terjemahan Baru (TB), naskah ber-timestamp, kelengkapan adegan visual/audio, dan metadata YouTube.
 
