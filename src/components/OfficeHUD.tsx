@@ -65,6 +65,7 @@ import {
 import { usePWA } from '../pwa/usePWA';
 import { PWAStatusToast } from './PWAInstallAndUpdate';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
+import type { ProviderConfig } from '../office/providerConfig';
 
 interface OfficeHUDProps {
   buildingState: BuildingSimulationState;
@@ -99,6 +100,7 @@ interface OfficeHUDProps {
   floorWorkflowFloorId: FloorId | null;
   controlsOpen: boolean;
   providerConfig: ProviderConfig;
+  onNarrationAudioCreated: (dataUrl: string) => void;
   selectedSpecialistId: SpecialistAgentId | null;
   masterBible: LocalBibleDatabase | null;
   masterBibleBusy: boolean;
@@ -259,6 +261,7 @@ export function OfficeHUD({
   onResetProviderConfig,
   onOpenChannelTemplates,
   onVoiceSynthesisEvent,
+  onNarrationAudioCreated,
   onSelectSpecialist,
   onSubmitSpecialistTask,
   onRunCommand,
@@ -583,6 +586,9 @@ export function OfficeHUD({
                 onMediaCreated={onMediaCreated}
                 onProjectVideo={onProjectVideo}
                 onMountGalleryImage={onMountGalleryImage}
+                providerConfig={providerConfig}
+                onVoiceSynthesisEvent={onVoiceSynthesisEvent}
+                onNarrationAudioCreated={onNarrationAudioCreated}
               />
             )}
 
