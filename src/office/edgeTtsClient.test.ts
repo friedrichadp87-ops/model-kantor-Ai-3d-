@@ -38,7 +38,7 @@ test('Edge-TTS payload rejects unknown voices and oversized scripts', () => {
   } as unknown as Parameters<typeof validateEdgeTtsPayload>[0];
   assert.equal(validateEdgeTtsPayload(unknown).ok, false);
   const tooLong = buildEdgeTtsPayload('job-3', 'id-ID-ArdiNeural', '-5%', '+0Hz', [
-    { role: 'narator', text: 'x'.repeat(10001) },
+    { role: 'narator', text: 'x'.repeat(80001) },
   ]);
   assert.equal(validateEdgeTtsPayload(tooLong).ok, false);
 });
