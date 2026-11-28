@@ -13,6 +13,8 @@ import {
   Loader2,
 } from 'lucide-react';
 import { BUILDING_FLOORS, type FloorId } from '../office/buildingFloors';
+import type { ProviderConfig } from '../office/providerConfig';
+import { buildEdgeTtsPayload, generateEdgeTtsAudio } from '../office/edgeTtsClient';
 import type { LightingPreset } from '../office/types';
 import {
   ALLOWED_IMAGE_ASPECTS,
@@ -48,6 +50,9 @@ interface MediaStudioDrawerProps {
   onMediaCreated: (item: GeneratedMediaItem) => void;
   onProjectVideo: (item: GeneratedMediaItem | null) => void;
   onMountGalleryImage: (dataUrl: string | null, label?: string) => void;
+  providerConfig: ProviderConfig;
+  onVoiceSynthesisEvent: (phase: 'start' | 'done' | 'error', label: string) => void;
+  onNarrationAudioCreated: (dataUrl: string) => void;
 }
 
 type StudioTab = 'video' | 'image';
@@ -93,6 +98,9 @@ export function MediaStudioDrawer({
   onMediaCreated,
   onProjectVideo,
   onMountGalleryImage,
+  providerConfig,
+  onVoiceSynthesisEvent,
+  onNarrationAudioCreated,
 }: MediaStudioDrawerProps) {
   const floorCfg = BUILDING_FLOORS[activeFloorId];
   const isDark = lighting === 'malam';
@@ -104,6 +112,10 @@ export function MediaStudioDrawer({
   const [videoDuration, setVideoDuration] = useState<VideoDuration>('10s');
   const [videoLoading, setVideoLoading] = useState(false);
   const [videoError, setVideoError] = useState<string | null>(null);
+  const [narrationText, setNarrationText] = useState('Pada suatu hari, Tuhan menuntun umat-Nya melewati perjalanan yang penuh harapan.');
+  const [narrationAudioUrl, setNarrationAudioUrl] = useState<string | null>(null);
+  const [narrationBusy, setNarrationBusy] = useState(false);
+  const [narrationError, setNarrationError] = useState<string | null>(null);
 
   // Image state
   const [imageMode, setImageMode] = useState<ImageStudioMode>('create');
@@ -212,6 +224,43 @@ export function MediaStudioDrawer({
       setVideoError('Koneksi ke layanan pembuatan video terputus.');
     } finally {
       setVideoLoading(false);
+    }
+  };
+
+  const handleGenerateNarration = async () => {
+    const text = narrationText.trim();
+    if (text.length < 3 || text.length > 80000) {
+      setNarrationError('Naskah narasi harus berisi 3 sampai 80.000 karakter.');
+      return;
+    }
+    if (providerConfig.voiceProvider !== 'edge-tts') {
+      setNarrationError('Pilih Edge-TTS pada Pengaturan → Suara & TTS untuk menggunakan tombol ini.');
+      return;
+    }
+
+    setNarrationBusy(true);
+    setNarrationError(null);
+    setNarrationAudioUrl(null);
+    onVoiceSynthesisEvent('start', 'Membuat audio narasi Edge-TTS dari Video Editor');
+    try {
+      const settings = providerConfig.edgeTts;
+      const payload = buildEdgeTtsPayload(
+        `editor-${Date.now()}`,
+        settings.voice,
+        settings.rate,
+        settings.pitch,
+        [{ role: 'narator', voice: settings.voice, text, pauseMs: 0 }]
+      );
+      const result = await generateEdgeTtsAudio(settings.workerUrl, payload);
+      setNarrationAudioUrl(result.dataUrl);
+      onNarrationAudioCreated(result.dataUrl);
+      onVoiceSynthesisEvent('done', 'Audio Edge-TTS selesai dari Video Editor');
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Gagal membuat audio narasi Edge-TTS.';
+      setNarrationError(message);
+      onVoiceSynthesisEvent('error', message);
+    } finally {
+      setNarrationBusy(false);
     }
   };
 
@@ -520,6 +569,41 @@ export function MediaStudioDrawer({
                 </div>
               )}
             </form>
+
+            <section className={`space-y-2 rounded-lg border p-3 md:col-span-7 ${cardBg}`}>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <h3 className="text-xs font-semibold">Audio Narasi untuk Video</h3>
+                <span className={`text-[10px] ${mutedText}`}>
+                  {providerConfig.voiceProvider === 'edge-tts' ? 'Edge-TTS aktif' : 'Pilih Edge-TTS di Pengaturan'}
+                </span>
+              </div>
+              <textarea
+                rows={3}
+                value={narrationText}
+                onChange={(e) => setNarrationText(e.target.value)}
+                placeholder="Tempelkan teks narasi untuk video..."
+                className={`w-full resize-y rounded-lg border px-2.5 py-2 text-xs leading-relaxed ${inputSurface}`}
+              />
+              {narrationError && <p role="alert" className="text-[11px] text-rose-500">{narrationError}</p>}
+              {narrationAudioUrl && (
+                <div className="flex flex-wrap items-center gap-2">
+                  <audio controls src={narrationAudioUrl} className="h-8 min-w-0 flex-1" />
+                  <a href={narrationAudioUrl} download="kantor-ai-narasi-edge-tts.mp3" className={`rounded-md border px-2 py-1 text-[11px] ${subtleBorder}`}>
+                    <Download className="mr-1 inline h-3 w-3" /> Unduh MP3
+                  </a>
+                  <span className="text-[10px] text-emerald-500">Audio siap dipakai pada produksi</span>
+                </div>
+              )}
+              <button
+                type="button"
+                onClick={() => void handleGenerateNarration()}
+                disabled={narrationBusy || providerConfig.voiceProvider !== 'edge-tts'}
+                className={`inline-flex items-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold text-white disabled:opacity-50 ${isDark ? 'bg-sky-600' : 'bg-slate-900'}`}
+              >
+                {narrationBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Volume2 className="h-3.5 w-3.5" />}
+                {narrationBusy ? 'Membuat audio...' : 'Buat Audio Narasi (Edge-TTS)'}
+              </button>
+            </section>
 
             {/* Video Output Shelf */}
             <div className="space-y-2 md:col-span-5">
