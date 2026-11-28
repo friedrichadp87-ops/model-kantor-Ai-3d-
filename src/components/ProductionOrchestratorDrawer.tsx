@@ -184,6 +184,7 @@ export function ProductionOrchestratorDrawer({
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
   const [youtubeUploadBusy, setYoutubeUploadBusy] = useState(false);
   const [youtubeUploadResult, setYoutubeUploadResult] = useState<YoutubeUploadResult | null>(null);
+  const [uploadedRunId, setUploadedRunId] = useState<string | null>(null);
   const [youtubeUploadError, setYoutubeUploadError] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
@@ -999,7 +1000,7 @@ export function ProductionOrchestratorDrawer({
       if (!automatic) setYoutubeUploadError('Video final dan QC LULUS wajib tersedia sebelum upload.');
       return;
     }
-    if (youtubeUploadBusy) return;
+    if (youtubeUploadBusy || uploadedRunId === source.id) return;
     setYoutubeUploadBusy(true); setYoutubeUploadError(null); setYoutubeUploadResult(null);
     try {
       const statusResponse = await fetch('/api/youtube/status', { cache: 'no-store' });
@@ -1009,7 +1010,8 @@ export function ProductionOrchestratorDrawer({
       if (!channel?.connected) { if (automatic) return; throw new Error('Hubungkan akun YouTube untuk channel ini melalui Pengaturan → YouTube terlebih dahulu.'); }
       if (automatic && !channel.autoUploadEnabled) return;
       const result = await uploadVideoToYoutube({ channelId: source.channelId, videoDataUrl: source.assembledVideo.dataUrl, metadata: source.youtubeMetadata, privacyStatus: channel.privacyStatus || 'private', runId: source.id });
-      setYoutubeUploadResult(result); setSavedNotice('Video berhasil diunggah ke YouTube: ' + result.title);
+      setYoutubeUploadResult(result); setUploadedRunId(source.id);
+      setSavedNotice(result.historyWarning || ('Video berhasil diunggah ke YouTube: ' + result.title));
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Upload YouTube gagal.';
       setYoutubeUploadError(message);
@@ -1803,10 +1805,10 @@ export function ProductionOrchestratorDrawer({
                           Putar di Layar 3D
                         </button>
                         {runState.finalQc?.readyForYoutubeUpload && runState.youtubeMetadata && (
-                          <button type="button" disabled={youtubeUploadBusy} onClick={() => void publishYoutubeVideo({ ...runState, channelId: runState.input.channelId }, false)}
+                          <button type="button" disabled={youtubeUploadBusy || uploadedRunId === runState.id} onClick={() => void publishYoutubeVideo({ ...runState, channelId: runState.input.channelId }, false)}
                             className={'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ' + (isDark ? 'bg-red-600 hover:bg-red-500' : 'bg-red-700 hover:bg-red-600')}>
                             {youtubeUploadBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
-                            Upload ke YouTube
+                            {uploadedRunId === runState.id ? 'Sudah Diunggah' : 'Upload ke YouTube'}
                           </button>
                         )}
                         <button
