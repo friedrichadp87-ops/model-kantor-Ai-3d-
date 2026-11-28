@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { OfficeHUD } from './components/OfficeHUD';
+import { YoutubeOAuthCallback } from './components/YoutubeOAuthCallback';
 import { clearApiMasterBibleCache, setApiMasterBibleCache } from './firebase/apiFetch';
 import { OfficeViewport, type OfficeViewportHandle } from './components/OfficeViewport';
 import type { MediaStudioPrefill } from './components/MediaStudioDrawer';
@@ -1933,6 +1934,8 @@ export default function App() {
         onStateSnapshot={handleStateSnapshot}
         onAgentClicked={handleAgentClicked}
       />
+
+      <YoutubeOAuthCallback />
 
       <OfficeHUD
         buildingState={buildingState}
