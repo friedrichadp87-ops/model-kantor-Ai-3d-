@@ -535,7 +535,14 @@ export async function syncMasterBibleToFirestore(
     // cleanup failure is harmless because readers filter by the active uploadId.
     try {
       const existingChunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
-      const staleDocs = existingChunksSnap.docs.filter((item) => item.data().uploadId !== uploadId);
+      const orphanCutoff = Date.now() - 24 * 60 * 60 * 1000;
+      const staleDocs = existingChunksSnap.docs.filter((item) => {
+        const data = item.data();
+        if (data.uploadId === uploadId) return false;
+        const updatedAt = Date.parse(String(data.updatedAt ?? ''));
+        // Keep recent versions because another device may still be uploading them.
+        return Number.isFinite(updatedAt) && updatedAt < orphanCutoff;
+      });
       if (staleDocs.length > 0) {
         await Promise.all(staleDocs.map((item) => deleteDoc(item.ref)));
       }
