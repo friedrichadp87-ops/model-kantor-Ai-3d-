@@ -14,6 +14,7 @@ export interface YoutubeUploadResult {
   videoId: string;
   videoUrl: string;
   title: string;
+  historyWarning?: string;
 }
 
 export async function uploadVideoToYoutube(options: YoutubeUploadOptions): Promise<YoutubeUploadResult> {
@@ -83,10 +84,11 @@ export async function uploadVideoToYoutube(options: YoutubeUploadOptions): Promi
       description, privacyStatus: options.privacyStatus, status: 'uploaded', runId: options.runId,
     }),
   });
+  let historyWarning: string | undefined;
   if (!historyResponse.ok) {
     const historyError = await historyResponse.json().catch(() => ({})) as { error?: string };
-    throw new Error('Video sudah diunggah, tetapi riwayat Firestore gagal disimpan: ' + (historyError.error || historyResponse.statusText));
+    historyWarning = 'Video sudah terunggah, tetapi riwayat Firestore gagal disimpan: ' + (historyError.error || historyResponse.statusText);
   }
   options.onProgress?.(100);
-  return { videoId: result.id, videoUrl, title };
+  return { videoId: result.id, videoUrl, title, historyWarning };
 }
