@@ -85,3 +85,48 @@ Repositori menetapkan Node.js 24 melalui file `.nvmrc` dan `package.json`. Fireb
 - Deploy Firestore Rules dan environment variables secara manual melalui konsol Firebase/Netlify; perubahan source code saja tidak dapat menerapkan pengaturan cloud tersebut.
 - Setelah merge/deploy, login kembali ke aplikasi. Uji unggah Master Alkitab, buka Dashboard Performa untuk ketiga lantai, lalu buat satu tugas uji agar catatan pertama muncul di Firestore.
 - Jangan menghapus koleksi `workHistory` jika masih membutuhkan jejak audit pekerjaan konten sebelumnya.
+
+
+## 8. Integrasi YouTube OAuth dan SEO Publisher
+
+Kantor AI 3D menggunakan Google Cloud Project lama yang sama, tetapi aplikasi Netlify memerlukan OAuth Client jenis Web application. OAuth Desktop Client lama tetap dapat dipakai worker Desktop lama dan tidak perlu dihapus.
+
+### Environment variables Netlify
+
+Isi variabel berikut di Site configuration → Environment variables. Jangan commit nilainya ke GitHub.
+
+- YOUTUBE_CLIENT_ID: Client ID OAuth Web application.
+- YOUTUBE_CLIENT_SECRET: Client Secret OAuth Web application.
+- YOUTUBE_REDIRECT_URI: URL callback aplikasi yang persis sama dengan Authorized redirect URI. Untuk situs produksi officecontent.netlify.app, gunakan https://officecontent.netlify.app/.
+- YOUTUBE_OAUTH_STATE_SECRET: secret acak independen minimal 32 karakter untuk tanda tangan state anti-CSRF.
+- YOUTUBE_TOKEN_ENCRYPTION_KEY: 32 byte acak yang dikodekan sebagai 64 karakter hex untuk AES-256-GCM.
+- FIREBASE_PROJECT_ID: tetap kantor-ai-agent-creator.
+- FIREBASE_ALLOWED_UIDS: UID Firebase pemilik seperti dijelaskan pada bagian 1.
+
+Buat secret secara lokal dengan password manager atau generator tepercaya. Jangan tempelkan Client Secret, refresh token, maupun encryption key ke percakapan, screenshot, atau GitHub.
+
+### Google Cloud Console
+
+1. Pertahankan project dan OAuth Desktop Client lama.
+2. Buat OAuth Client baru bertipe Web application di project yang sama.
+3. Masukkan URL YOUTUBE_REDIRECT_URI persis sebagai Authorized redirect URI.
+4. Pastikan YouTube Data API v3 aktif.
+5. Tambahkan domain aplikasi ke Authorized domains dan atur OAuth Audience. Aplikasi yang masih Testing memiliki batas masa berlaku refresh token untuk scope YouTube; pindahkan ke In production dan selesaikan verifikasi Google yang diwajibkan sebelum operasional 24/7.
+
+### Alur aplikasi
+
+- Pengaturan → Koneksi Provider → YouTube OAuth.
+- Hubungkan akun Google yang memiliki kanal target pada setiap lantai. Satu koneksi OAuth mengunggah ke kanal YouTube default akun Google tersebut.
+- Refresh token dienkripsi AES-256-GCM sebelum disimpan pada users/{uid}/youtubeConnections/{channelId}.
+- Access token hanya dikirim sementara ke browser untuk memulai upload resumable; refresh token dan Client Secret tidak pernah dikirim ke browser.
+- SEO Publisher memakai judul, deskripsi, hashtag/tag, dan label Made for Kids dari pipeline; video harus lulus Final QC.
+- Aktifkan opsi upload otomatis per channel. Default tetap nonaktif dan privasi awal Private.
+- Riwayat upload disimpan pada users/{uid}/youtubeUploads/{videoId}.
+
+### Batasan penting
+
+- OAuth lama bertipe Desktop tidak dapat menjadi callback web Netlify; buat Web application Client dalam project yang sama, jangan membuat project baru.
+- Jika OAuth consent masih Testing, refresh token YouTube dapat kedaluwarsa setelah 7 hari. Status In production dan proses verifikasi Google diperlukan untuk penggunaan berkelanjutan.
+- Upload browser memakai sesi resumable YouTube. Pengguna harus membiarkan tab aplikasi terbuka sampai transfer video selesai; ini bukan job serverless background 24/7. Penjadwalan upload tanpa browser terbuka memerlukan worker/cloud job yang tahan lama pada tahap berikutnya.
+- Setiap video memakai kuota YouTube Data API; pantau quota project dan kebijakan YouTube.
+- Uji pertama gunakan Private. Pastikan kanal Google yang terhubung benar sebelum mengaktifkan Public/Unlisted atau auto-upload.
