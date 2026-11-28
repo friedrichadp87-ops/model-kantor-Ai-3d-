@@ -236,6 +236,13 @@ export function sanitizeWorkspaceSettingsPayload(
     channelTemplates,
     providerConfig: {
       llmRouting: providerConfig.llmRouting,
+      voiceProvider: providerConfig.voiceProvider,
+      edgeTts: {
+        workerUrl: clampString(providerConfig.edgeTts.workerUrl, 512),
+        voice: providerConfig.edgeTts.voice,
+        rate: clampString(providerConfig.edgeTts.rate, 8),
+        pitch: clampString(providerConfig.edgeTts.pitch, 8),
+      },
       ollama: {
         enabled: Boolean(providerConfig.ollama.enabled),
         baseUrl: clampString(providerConfig.ollama.baseUrl, 256),
