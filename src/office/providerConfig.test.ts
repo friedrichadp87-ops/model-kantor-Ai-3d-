@@ -107,7 +107,7 @@ test('validateElevenLabsTtsRequest validates narration length and voiceId format
 
 test('Edge-TTS settings merge and validate rate, pitch, voice and Worker URL', () => {
   const defaults = createDefaultProviderConfig();
-  assert.equal(defaults.voiceProvider, 'elevenlabs');
+  assert.equal(defaults.voiceProvider, 'edge-tts');
   assert.equal(defaults.edgeTts.voice, 'id-ID-ArdiNeural');
   assert.equal(defaults.edgeTts.rate, '-5%');
   assert.equal(defaults.edgeTts.pitch, '+0Hz');
@@ -129,4 +129,26 @@ test('Edge-TTS settings merge and validate rate, pitch, voice and Worker URL', (
 
   const invalid = { ...defaults, voiceProvider: 'edge-tts' as const, edgeTts: { ...defaults.edgeTts, rate: '-40%' } };
   assert.equal(validateProviderConfig(invalid).ok, false);
+});
+
+
+test('legacy provider settings without a voiceProvider now default to Edge-TTS', () => {
+  const legacy = mergeProviderConfig({
+    elevenlabs: {
+      enabled: true,
+      voiceId: '21m00Tcm4TlvDq8ikWAM',
+      voiceName: 'Rachel (Narasi Hangat)',
+      modelId: 'eleven_multilingual_v2',
+      stability: 0.55,
+      similarityBoost: 0.75,
+    },
+  });
+  assert.equal(legacy.voiceProvider, 'edge-tts');
+  assert.equal(legacy.elevenlabs.voiceId, '21m00Tcm4TlvDq8ikWAM');
+});
+
+test('ElevenLabs remains selectable as an explicit secondary provider', () => {
+  const config = mergeProviderConfig({ voiceProvider: 'elevenlabs' });
+  assert.equal(config.voiceProvider, 'elevenlabs');
+  assert.equal(config.elevenlabs.enabled, true);
 });
