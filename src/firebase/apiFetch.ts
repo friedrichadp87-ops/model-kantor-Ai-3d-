@@ -187,8 +187,7 @@ export function installAuthenticatedApiFetch(): void {
       requestUrl.origin !== window.location.origin ||
       !requestUrl.pathname.startsWith('/api/') ||
       requestUrl.pathname === '/api/health' ||
-      requestUrl.pathname === '/api/pwa/remote-version' ||
-      requestUrl.pathname.startsWith('/api/youtube/')
+      requestUrl.pathname === '/api/pwa/remote-version'
     ) {
       return originalFetch(input, init);
     }
@@ -226,6 +225,7 @@ export function installAuthenticatedApiFetch(): void {
       suppliedBody.length > 0 &&
       suppliedBody.length <= 1_000_000 &&
       requestHeaders.get('content-type')?.toLowerCase().includes('application/json') &&
+      !requestUrl.pathname.startsWith('/api/youtube/') &&
       !requestUrl.pathname.startsWith('/api/studio/') &&
       !requestUrl.pathname.includes('/scene-keyframe') &&
       !requestUrl.pathname.includes('/scene-animate') &&
