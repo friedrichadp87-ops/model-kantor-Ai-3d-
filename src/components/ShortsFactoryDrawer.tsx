@@ -1,4 +1,4 @@
-import { useEffect, useId, useMemo, useState, type ChangeEvent, type FormEvent } from 'react';
+import { useEffect, useId, useMemo, useState, type FormEvent } from 'react';
 import {
   AlertCircle,
   BookOpen,
@@ -20,7 +20,6 @@ import {
   SlidersHorizontal,
   Sparkles,
   Tv,
-  Upload,
   X,
 } from 'lucide-react';
 import type { LightingPreset } from '../office/types';
@@ -36,7 +35,6 @@ import {
   getChannelById,
   getJakartaOperationStatus,
   lookupLocalBibleReference,
-  parseLocalBibleJson,
   validateChannelTemplate,
   validateShortsBrief,
   type BibleGroupId,
@@ -76,6 +74,7 @@ export interface ShortsProductionEvent {
 
 interface ShortsFactoryDrawerProps {
   lighting: LightingPreset;
+  masterBible: LocalBibleDatabase | null;
   queue: ShortsQueueItem[];
   channelTemplates: ChannelTemplatesMap;
   externalTab?: FactoryTab;
@@ -139,6 +138,7 @@ function careFlagMeta(flag: CareFlag): { label: string; tone: 'emerald' | 'amber
 
 export function ShortsFactoryDrawer({
   lighting,
+  masterBible,
   queue,
   channelTemplates,
   externalTab,
@@ -251,13 +251,9 @@ export function ShortsFactoryDrawer({
   const [seriesEpisodes, setSeriesEpisodes] = useState<BibleSeriesEpisode[]>([]);
 
   // Browser-local indo_tb.json state (never uploaded externally)
-  const [localBibleDb, setLocalBibleDb] = useState<LocalBibleDatabase | null>(null);
-  const [localBibleTermsAccepted, setLocalBibleTermsAccepted] = useState(false);
-  const [localBibleError, setLocalBibleError] = useState<string | null>(null);
 
   const topicInputId = useId();
   const refInputId = useId();
-  const bibleFileId = useId();
   const tplScriptId = useId();
   const tplVisualId = useId();
   const tplCtaId = useId();
@@ -302,19 +298,19 @@ export function ShortsFactoryDrawer({
   const cardBg = isDark ? 'border-slate-800 bg-slate-900/85' : 'border-slate-200 bg-white';
 
   const buildLocalVerseContext = (scriptText: string, refText: string) => {
-    if (!localBibleDb || !localBibleTermsAccepted) return undefined;
+    if (!masterBible) return undefined;
     const refs = extractIndonesianBibleReferences(scriptText, refText);
     if (refs.length === 0) return undefined;
     const verses: Array<{ ref: string; text: string }> = [];
     const missingRefs: string[] = [];
     for (const ref of refs) {
-      const lookup = lookupLocalBibleReference(localBibleDb.versesMap, ref);
+      const lookup = lookupLocalBibleReference(masterBible.versesMap, ref);
       verses.push(...lookup.verses);
       missingRefs.push(...lookup.missingRefs);
     }
     return {
       sourceReady: true,
-      sourceName: localBibleDb.report.sourceName,
+      sourceName: masterBible.report.sourceName,
       verses: verses.slice(0, 20),
       missingRefs: Array.from(new Set(missingRefs)),
     };
@@ -627,27 +623,6 @@ export function ShortsFactoryDrawer({
     } finally {
       setSeriesLoading(false);
     }
-  };
-
-  const handleUploadLocalBible = (e: ChangeEvent<HTMLInputElement>) => {
-    setLocalBibleError(null);
-    const file = e.target.files?.[0];
-    if (!file) return;
-    if (file.size > 15 * 1024 * 1024) {
-      setLocalBibleError('Ukuran file JSON maksimal 15 MB.');
-      return;
-    }
-    const reader = new FileReader();
-    reader.onload = () => {
-      try {
-        const raw = typeof reader.result === 'string' ? reader.result : '';
-        const parsed = parseLocalBibleJson(raw);
-        setLocalBibleDb(parsed);
-      } catch (err) {
-        setLocalBibleError(err instanceof Error ? err.message : 'Gagal membaca file Alkitab.');
-      }
-    };
-    reader.readAsText(file);
   };
 
   return (
@@ -1918,68 +1893,28 @@ export function ShortsFactoryDrawer({
                 )}
               </div>
 
-              {/* Local indo_tb.json Importer (100% browser memory) */}
+              {/* Shared Master Bible loaded once from Settings and Firestore for all floors */}
               <div className={`rounded-lg border p-3 md:col-span-5 ${cardBg}`}>
-                <div className="flex items-center justify-between gap-2">
-                  <h3 className="text-xs font-bold">Sumber Alkitab indo_tb.json (Lokal)</h3>
-                  <input
-                    id={bibleFileId}
-                    type="file"
-                    accept="application/json,.json"
-                    onChange={handleUploadLocalBible}
-                    className="sr-only"
-                  />
-                  <label
-                    htmlFor={bibleFileId}
-                    className={`inline-flex cursor-pointer items-center gap-1 rounded-md border px-2 py-1 text-[11px] font-medium ${subtleBorder}`}
-                  >
-                    <Upload className="h-3 w-3" aria-hidden="true" />
-                    Muat JSON
-                  </label>
+                <div className="flex items-center gap-2">
+                  <BookOpen className="h-4 w-4 text-sky-600 dark:text-sky-300" aria-hidden="true" />
+                  <h3 className="text-xs font-bold">Master Alkitab Terjemahan Baru · Sumber Bersama</h3>
                 </div>
-                <p className={`mt-1 text-[11px] leading-relaxed ${mutedText}`}>
-                  Diproses 100% lokal di memori browser Anda untuk verifikasi ayat Theological
-                  Guardian. Tidak pernah disimpan ke server eksternal.
-                </p>
-
-                {localBibleError && (
-                  <p role="alert" className="mt-1.5 text-[11px] text-rose-500">
-                    {localBibleError}
-                  </p>
-                )}
-
-                {localBibleDb ? (
+                {masterBible ? (
                   <div className={`mt-2 space-y-1.5 rounded-md border p-2 text-[11px] ${subtleBorder}`}>
                     <div className="flex items-center gap-1.5 font-semibold text-emerald-600 dark:text-emerald-400">
                       <CheckCircle2 className="h-3.5 w-3.5" aria-hidden="true" />
-                      <span>{localBibleDb.report.sourceName}</span>
+                      <span>{masterBible.report.sourceName}</span>
                     </div>
                     <p className="font-mono text-[10px] tabular-nums">
-                      {localBibleDb.report.bookCount}/66 kitab · {localBibleDb.report.chapterCount}{' '}
-                      pasal · {localBibleDb.report.indexedVerseCount.toLocaleString('id-ID')} ayat
+                      {masterBible.report.bookCount}/66 kitab · {masterBible.report.chapterCount} pasal · {masterBible.report.indexedVerseCount.toLocaleString('id-ID')} ayat
                     </p>
                     <p className={`text-[10px] ${mutedText}`}>
-                      {localBibleDb.report.publisher}
-                      {localBibleDb.report.year ? ` (${localBibleDb.report.year})` : ''} ·{' '}
-                      {localBibleDb.report.copyrightStatement}
+                      Sumber yang sama dipakai Lantai 1, 2, dan 3. Data tersimpan di Firestore milik akun ini dan dibaca untuk konteks setiap pekerjaan AI.
                     </p>
-                    <label className="flex cursor-pointer items-start gap-1.5 pt-1 text-[10px]">
-                      <input
-                        type="checkbox"
-                        checked={localBibleTermsAccepted}
-                        onChange={(e) => setLocalBibleTermsAccepted(e.target.checked)}
-                        className="mt-0.5"
-                      />
-                      <span>
-                        Saya memahami hak cipta teks Alkitab lokal ini dan hanya memakainya untuk
-                        verifikasi pribadi.
-                      </span>
-                    </label>
                   </div>
                 ) : (
                   <div className={`mt-2 rounded-md border border-dashed p-2.5 text-[11px] ${subtleBorder} ${mutedText}`}>
-                    Mendukung format <code>indo_tb.json</code> (<code>metadata + verses[]</code>)
-                    maupun format lama (<code>kitab/pasal/ayat/teks</code>).
+                    Master Alkitab belum tersedia. Unggah satu kali melalui Pengaturan → Master Alkitab. Semua lantai akan memakai sumber yang sama.
                   </div>
                 )}
               </div>
