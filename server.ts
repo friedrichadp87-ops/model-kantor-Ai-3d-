@@ -81,7 +81,7 @@ const FALLBACK_MASTER_BIBLE_CONTEXT = [
   'ATURAN MUTLAK SUMBER UTAMA ALKITAB (BERLAKU DI SELURUH LANTAI 1, 2 & 3 KANTOR AI 3D):',
   'Alkitab Terjemahan Baru (TB) yang diunggah pemilik adalah sumber utama untuk semua pekerjaan yang memakai rujukan Alkitab.',
   'Jangan pernah mengarang kutipan ayat. Bila kutipan verbatim tidak tersedia dari Master Alkitab Firestore, nyatakan bahwa rujukan perlu diverifikasi dan jangan mengklaim kutipan berasal dari TB.',
-].join('\\n');
+].join('\n');
 
 function masterBibleRecord(input: unknown): Record<string, unknown> {
   return input && typeof input === 'object' ? (input as Record<string, unknown>) : {};
@@ -108,9 +108,9 @@ function getMasterBibleVerses(input: unknown, reference?: string): Array<{ ref: 
     })
     .filter((item) => item.ref && item.text);
   if (!reference?.trim()) return verses;
-  const normalized = reference.trim().toLocaleLowerCase('id-ID').replace(/\\s+/g, ' ');
+  const normalized = reference.trim().toLocaleLowerCase('id-ID').replace(/\s+/g, ' ');
   const matched = verses.filter((item) => {
-    const ref = item.ref.toLocaleLowerCase('id-ID').replace(/\\s+/g, ' ');
+    const ref = item.ref.toLocaleLowerCase('id-ID').replace(/\s+/g, ' ');
     return ref === normalized || normalized.startsWith(ref) || ref.startsWith(normalized);
   });
   return matched.length ? matched : verses.slice(0, 4);
