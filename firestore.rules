@@ -25,6 +25,14 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
+    // YouTube refresh tokens are encrypted by the server. Browser users may only access their own records.
+    match /users/{userId}/youtubeConnections/{channelId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+    match /users/{userId}/youtubeUploads/{videoId} {
+      allow read, write: if request.auth != null && request.auth.uid == userId;
+    }
+
     // No public or cross-user Firestore access.
     match /{document=**} {
       allow read, write: if false;
