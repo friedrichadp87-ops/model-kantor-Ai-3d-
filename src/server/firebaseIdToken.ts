@@ -132,5 +132,11 @@ export function isAllowedFirebaseUid(uid: string): boolean {
     .split(',')
     .map((value) => value.trim())
     .filter(Boolean);
-  return configured.length === 0 || configured.includes(uid);
+
+  // A production deployment must explicitly name its owner UID. Do not let an
+  // arbitrary account that can self-register consume the server's provider keys.
+  if (configured.length === 0) {
+    return process.env.NODE_ENV !== 'production';
+  }
+  return configured.includes(uid);
 }
