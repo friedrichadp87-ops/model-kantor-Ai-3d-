@@ -962,7 +962,7 @@ export default function App() {
 
         // Activate the one building-wide Master Bible for every floor and API request.
         setMasterBible(parsed);
-        if (firebaseUser) setApiMasterBibleCache(firebaseUser.uid, parsed);
+        clearApiMasterBibleCache();
 
         // 1. Primary cloud persistence: save chunked Master Alkitab directly to Firebase Firestore when signed in
         let savedToFirebase = false;
@@ -971,11 +971,14 @@ export default function App() {
           const fbRes = await syncMasterBibleToFirestore(firebaseUser.uid, parsed);
           if (fbRes.ok) {
             savedToFirebase = true;
+            setApiMasterBibleCache(firebaseUser.uid, parsed);
             firebaseNotice = `Tersimpan di Firebase Firestore (${fbRes.chunkCount ?? 1} bagian) — otomatis sinkron di PC, Android & Netlify.`;
           } else if (fbRes.permissionDenied) {
+            clearApiMasterBibleCache();
             firebaseNotice =
               'Alkitab aktif di browser. Tambahkan aturan Firestore Rules untuk masterBible & masterBibleChunks (buka panel Firebase) agar tersimpan di Cloud.';
           } else {
+            clearApiMasterBibleCache();
             firebaseNotice = `Alkitab aktif di browser. Sinkronisasi Firebase tertunda (${fbRes.errorMessage || 'coba lagi'}).`;
           }
         }
@@ -999,6 +1002,7 @@ export default function App() {
           ])
         );
       } catch (err) {
+        clearApiMasterBibleCache();
         const msg =
           err instanceof Error ? err.message : 'Gagal membaca file Alkitab Terjemahan Baru.';
         setMasterBibleError(msg);
@@ -1036,33 +1040,6 @@ export default function App() {
       setMasterBibleBusy(false);
     }
   }, [firebaseUser]);
-
-  const handleDevotionalResearchEvent = useCallback(
-    (phase: 'start' | 'done' | 'error', detail: string) => {
-      const taskId = 'l1_devotional_research';
-      if (phase === 'start') {
-        viewportRef.current?.startAgentTask(1, 'trend-researcher', `${taskId}_t`, detail);
-        viewportRef.current?.startAgentTask(1, 'bible-researcher', `${taskId}_b`, detail);
-        setActivityLog((prev) =>
-          appendActivityLog(prev, [
-            createStudioActivityEntry(`[L1] Riset Renungan Valid dimulai: ${detail}`),
-          ])
-        );
-      } else if (phase === 'done') {
-        viewportRef.current?.finishAgentTask(1, 'trend-researcher', `${taskId}_t`, true);
-        viewportRef.current?.finishAgentTask(1, 'bible-researcher', `${taskId}_b`, true);
-        setActivityLog((prev) =>
-          appendActivityLog(prev, [
-            createStudioActivityEntry(`[L1] Renungan harian valid siap (2m 50d): ${detail}`),
-          ])
-        );
-      } else {
-        viewportRef.current?.finishAgentTask(1, 'trend-researcher', `${taskId}_t`, false);
-        viewportRef.current?.finishAgentTask(1, 'bible-researcher', `${taskId}_b`, false);
-      }
-    },
-    []
-  );
 
   const handleCloseControls = useCallback(() => {
     setControlsOpen(false);
@@ -1205,6 +1182,58 @@ export default function App() {
       });
     },
     [firebaseUser, masterBible]
+  );
+
+  const activeDevotionalRunRef = useRef<string | null>(null);
+  const handleDevotionalResearchEvent = useCallback(
+    (phase: 'start' | 'done' | 'error', detail: string) => {
+      if (phase === 'start') {
+        activeDevotionalRunRef.current = `l1_devotional_${Date.now().toString(36)}`;
+      }
+      const runId = activeDevotionalRunRef.current ?? `l1_devotional_${Date.now().toString(36)}`;
+      const agentIds: AgentId[] = ['trend-researcher', 'bible-researcher'];
+      for (const agentId of agentIds) {
+        const identity = getFloorEmployeeIdentity(1, agentId);
+        appendFloorWorkHistory({
+          id: runId,
+          floorId: 1,
+          phase: phase === 'done' ? 'completed' : phase,
+          eventType: 'devotional-research',
+          title: detail.slice(0, 220),
+          projectId: runId,
+          runId,
+          taskId: `${runId}_${agentId}`,
+          agentId,
+          agentName: identity.name,
+          stageId: 'devotional-research',
+          stageTitle: phase === 'start' ? 'Riset renungan dimulai' : phase === 'done' ? 'Riset renungan selesai' : 'Riset renungan gagal',
+          input: phase === 'start' ? detail : '',
+          output: phase === 'done' ? detail : '',
+          error: phase === 'error' ? detail : '',
+          detail,
+        });
+      }
+
+      if (phase === 'start') {
+        viewportRef.current?.startAgentTask(1, 'trend-researcher', `${runId}_t`, detail);
+        viewportRef.current?.startAgentTask(1, 'bible-researcher', `${runId}_b`, detail);
+        setActivityLog((prev) => appendActivityLog(prev, [
+          createStudioActivityEntry(`[L1] Riset Renungan Valid dimulai: ${detail}`),
+        ]));
+      } else if (phase === 'done') {
+        viewportRef.current?.finishAgentTask(1, 'trend-researcher', `${runId}_t`, true);
+        viewportRef.current?.finishAgentTask(1, 'bible-researcher', `${runId}_b`, true);
+        setActivityLog((prev) => appendActivityLog(prev, [
+          createStudioActivityEntry(`[L1] Renungan harian valid siap (2m 50d): ${detail}`),
+        ]));
+        activeDevotionalRunRef.current = null;
+      } else {
+        viewportRef.current?.finishAgentTask(1, 'trend-researcher', `${runId}_t`, false);
+        viewportRef.current?.finishAgentTask(1, 'bible-researcher', `${runId}_b`, false);
+        activeDevotionalRunRef.current = null;
+      }
+    },
+    [appendFloorWorkHistory]
   );
 
   const handleOrchestratorStageEvent = useCallback((ev: OrchestratorStageEvent) => {
