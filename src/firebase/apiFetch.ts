@@ -14,6 +14,23 @@ let cachedUid: string | null = null;
 let cachedBiblePromise: Promise<LocalBibleDatabase | null> | null = null;
 let installed = false;
 
+let activeApiWorkContext: {
+  runId: string;
+  channelId: 'daily-faith-inspiration' | 'bible-stories-3d' | 'bible-facts-mysteries';
+} | null = null;
+
+export function setActiveApiWorkContext(
+  runId: string,
+  channelId: 'daily-faith-inspiration' | 'bible-stories-3d' | 'bible-facts-mysteries'
+): void {
+  activeApiWorkContext = { runId, channelId };
+}
+
+export function clearActiveApiWorkContext(runId?: string): void {
+  if (!runId || activeApiWorkContext?.runId === runId) activeApiWorkContext = null;
+}
+
+
 export function setApiMasterBibleCache(uid: string, database: LocalBibleDatabase): void {
   cachedUid = uid;
   cachedBiblePromise = Promise.resolve(database);
@@ -58,6 +75,9 @@ function inferAuditFloor(pathname: string, body: Record<string, unknown>): Audit
   if (pathname.includes('/devotional/')) return 1;
   if (pathname.includes('/bible-stories/')) return 2;
   if (pathname.includes('/bible-facts/')) return 3;
+  if (activeApiWorkContext?.channelId === 'daily-faith-inspiration') return 1;
+  if (activeApiWorkContext?.channelId === 'bible-stories-3d') return 2;
+  if (activeApiWorkContext?.channelId === 'bible-facts-mysteries') return 3;
   return null;
 }
 
@@ -261,7 +281,7 @@ export function installAuthenticatedApiFetch(): void {
           auditBody.bookScope ?? auditBody.task ?? auditBody.prompt ?? auditBody.reference ??
           auditBody.scopeLabel ?? requestUrl.pathname;
         const safeInput = safeAuditJson(auditBody, 7000);
-        const runId = String(auditBody.runId ?? auditBody.projectId ?? auditBody.taskId ?? id).slice(0, 140);
+        const runId = String(auditBody.runId ?? auditBody.projectId ?? auditBody.taskId ?? activeApiWorkContext?.runId ?? id).slice(0, 140);
         const agentId = typeof auditBody.agentId === 'string' ? auditBody.agentId.slice(0, 80) : '';
         const masterBibleActive = auditBody.masterBibleActive === true;
         const masterBibleSourceName = typeof auditBody.masterBibleSourceName === 'string'
