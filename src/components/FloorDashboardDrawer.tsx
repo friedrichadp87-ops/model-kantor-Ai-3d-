@@ -25,6 +25,7 @@ import {
   type FloorEmployeeFilter,
 } from '../office/floorPerformance';
 import type { ShortsQueueItem } from '../office/shortsFactory';
+import type { WorkHistoryRecord } from '../firebase/officeSync';
 import type { AgentId, LightingPreset, OfficeCommand, TaskEntry } from '../office/types';
 
 interface FloorDashboardDrawerProps {
@@ -32,6 +33,7 @@ interface FloorDashboardDrawerProps {
   activeFloorId: FloorId;
   lighting: LightingPreset;
   tasksByFloorAgent: Record<string, TaskEntry[]>;
+  workHistory: WorkHistoryRecord[];
   shortsQueue: ShortsQueueItem[];
   onSelectFloor: (floorId: FloorId) => void;
   onFocusEmployeeIn3D: (floorId: FloorId, agentId: AgentId) => void;
@@ -52,6 +54,7 @@ export function FloorDashboardDrawer({
   activeFloorId,
   lighting,
   tasksByFloorAgent,
+  workHistory,
   shortsQueue,
   onSelectFloor,
   onFocusEmployeeIn3D,
@@ -81,6 +84,10 @@ export function FloorDashboardDrawer({
   );
 
   const activeMetrics = metricsByFloor[selectedFloorId];
+  const selectedFloorHistory = useMemo(
+    () => workHistory.filter((item) => item.floorId === selectedFloorId).slice(0, 40),
+    [workHistory, selectedFloorId]
+  );
   const filteredEmployees = useMemo(
     () => filterFloorEmployees(activeMetrics.employees, statusFilter, searchQuery),
     [activeMetrics.employees, statusFilter, searchQuery]
@@ -802,6 +809,97 @@ export function FloorDashboardDrawer({
                   </li>
                 ))}
               </ul>
+            )}
+          </div>
+
+          {/* Immutable Firestore audit trail for the selected floor */}
+          <div className={`mt-2 border-t pt-2 ${dividerClass}`}>
+            <div className="flex items-center justify-between gap-2 text-[11px]">
+              <span className="font-semibold">Dokumentasi Pekerjaan AI · Lantai {selectedFloorId}</span>
+              <span className={`font-mono tabular-nums ${mutedTextClass}`}>
+                {selectedFloorHistory.length} / 40 catatan terbaru
+              </span>
+            </div>
+            {selectedFloorHistory.length === 0 ? (
+              <p className={`mt-1.5 text-[11px] ${mutedTextClass}`}>
+                Belum ada histori tersinkron. Login Firebase dan jalankan pekerjaan agen agar setiap tahap tercatat di Firestore.
+              </p>
+            ) : (
+              <ol className="mt-1.5 max-h-[240px] space-y-1.5 overflow-y-auto pr-1">
+                {selectedFloorHistory.map((item) => {
+                  const statusLabel =
+                    item.phase === 'completed'
+                      ? 'Selesai'
+                      : item.phase === 'error'
+                      ? 'Gagal'
+                      : item.phase === 'warning'
+                      ? 'Peringatan'
+                      : 'Mulai';
+                  const statusClass =
+                    item.phase === 'completed'
+                      ? 'text-emerald-700 dark:text-emerald-300'
+                      : item.phase === 'error'
+                      ? 'text-red-600 dark:text-red-400'
+                      : item.phase === 'warning'
+                      ? 'text-amber-700 dark:text-amber-300'
+                      : 'text-blue-600 dark:text-blue-300';
+                  return (
+                    <li key={item.id} className={`rounded-lg border px-2.5 py-2 ${dividerClass}`}>
+                      <div className="flex items-start justify-between gap-2 text-[11px]">
+                        <div className="min-w-0">
+                          <p className="truncate font-semibold">
+                            {item.agentName || item.stageTitle || item.eventType}
+                            <span className={`ml-1.5 font-normal ${mutedTextClass}`}>
+                              · {item.stageTitle || item.eventType}
+                            </span>
+                          </p>
+                          <p className={`mt-0.5 break-words ${mutedTextClass}`}>{item.title}</p>
+                        </div>
+                        <span className={`shrink-0 font-semibold ${statusClass}`}>{statusLabel}</span>
+                      </div>
+                      <div className={`mt-1 flex flex-wrap items-center gap-x-2 text-[10px] ${mutedTextClass}`}>
+                        <time>{item.createdAt ? new Date(item.createdAt).toLocaleString('id-ID') : 'Waktu tidak tersedia'}</time>
+                        <span>{item.channelName}</span>
+                        {item.provider && <span>{item.provider}{item.model ? ` · ${item.model}` : ''}</span>}
+                      </div>
+                      {(item.error || item.detail || item.input || item.output) && (
+                        <details className="mt-1.5 text-[10.5px]">
+                          <summary className="cursor-pointer font-medium text-sky-700 dark:text-sky-300">
+                            Lihat detail pekerjaan / hasil / kesalahan
+                          </summary>
+                          {item.input && (
+                            <div className="mt-1">
+                              <strong>Input / Instruksi</strong>
+                              <p className="mt-0.5 whitespace-pre-wrap break-words">{item.input}</p>
+                            </div>
+                          )}
+                          {item.output && (
+                            <div className="mt-1">
+                              <strong>Hasil AI</strong>
+                              <p className="mt-0.5 whitespace-pre-wrap break-words">{item.output}</p>
+                            </div>
+                          )}
+                          {item.error && (
+                            <div className="mt-1 text-red-600 dark:text-red-400">
+                              <strong>Kesalahan</strong>
+                              <p className="mt-0.5 whitespace-pre-wrap break-words">{item.error}</p>
+                            </div>
+                          )}
+                          {item.detail && (
+                            <div className="mt-1">
+                              <strong>Catatan tahap</strong>
+                              <p className="mt-0.5 whitespace-pre-wrap break-words">{item.detail}</p>
+                            </div>
+                          )}
+                          <p className={`mt-1 ${mutedTextClass}`}>
+                            Project: {item.projectId || '-'} · Run: {item.runId || '-'} · Task: {item.taskId || '-'}
+                          </p>
+                        </details>
+                      )}
+                    </li>
+                  );
+                })}
+              </ol>
             )}
           </div>
         </div>
