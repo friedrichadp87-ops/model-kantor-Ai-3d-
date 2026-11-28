@@ -127,6 +127,6 @@ test('Edge-TTS settings merge and validate rate, pitch, voice and Worker URL', (
   assert.equal(merged.edgeTts.rate, '-30%');
   assert.equal(merged.edgeTts.pitch, '+20Hz');
 
-  const invalid = { ...defaults, edgeTts: { ...defaults.edgeTts, rate: '-40%' } };
+  const invalid = { ...defaults, voiceProvider: 'edge-tts' as const, edgeTts: { ...defaults.edgeTts, rate: '-40%' } };
   assert.equal(validateProviderConfig(invalid).ok, false);
 });
