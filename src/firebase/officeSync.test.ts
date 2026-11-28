@@ -14,6 +14,7 @@ import {
   sanitizeUserProfilePayload,
   sanitizeWorkspaceSettingsPayload,
   sanitizeWorkHistoryRecord,
+  selectMasterBibleChunksForUpload,
 } from './officeSync';
 
 test('FIRESTORE_PATHS builds deterministic per-user paths matching firebase-blueprint.json', () => {
@@ -211,4 +212,22 @@ test('sanitizeWorkHistoryRecord preserves floor, run, agent and error details wh
   assert.equal(record.error, 'Provider mengembalikan HTTP 429.');
   assert.equal(record.masterBibleActive, true);
   assert.equal(record.masterBibleSourceName, 'TB JSON');
+});
+
+test('selectMasterBibleChunksForUpload never mixes an old and new upload version', () => {
+  const chunks = [
+    { uploadId: 'upload-old', chunkIndex: 0, verses: { 'Kejadian 1:1': 'old text' } },
+    { uploadId: 'upload-new', chunkIndex: 0, verses: { 'Kejadian 1:1': 'new text' } },
+    { chunkIndex: 0, verses: { 'Kejadian 1:1': 'legacy text' } },
+  ];
+
+  const active = selectMasterBibleChunksForUpload({ uploadId: 'upload-new' }, chunks);
+  assert.equal(active.length, 1);
+  assert.equal(active[0].uploadId, 'upload-new');
+  assert.equal(active[0].verses?.['Kejadian 1:1'], 'new text');
+
+  const legacy = selectMasterBibleChunksForUpload({ chunkCount: 1 }, chunks);
+  assert.equal(legacy.length, 1);
+  assert.equal(legacy[0].uploadId, undefined);
+  assert.equal(legacy[0].verses?.['Kejadian 1:1'], 'legacy text');
 });
