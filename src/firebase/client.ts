@@ -586,6 +586,50 @@ export async function loadMasterBibleFromFirestore(
   }
 }
 
+export function subscribeMasterBible(
+  uid: string,
+  onDatabase: (database: LocalBibleDatabase | null) => void,
+  onError: (info: { permissionDenied: boolean; path: string; message: string }) => void
+): Unsubscribe {
+  const path = FIRESTORE_PATHS.masterBibleMetaDoc(uid);
+  return onSnapshot(
+    doc(db, 'users', uid, 'masterBible', 'meta'),
+    async (metaSnapshot) => {
+      if (!metaSnapshot.exists()) {
+        onDatabase(null);
+        return;
+      }
+      try {
+        const result = await loadMasterBibleFromFirestore(uid);
+        if (result.ok) onDatabase(result.database);
+        else {
+          onError({
+            permissionDenied: Boolean(result.permissionDenied),
+            path: result.path,
+            message: result.errorMessage ?? 'Master Alkitab Firestore gagal dimuat.',
+          });
+        }
+      } catch (error) {
+        const info = buildFirestoreErrorInfo(error, OperationType.GET, path);
+        onError({
+          permissionDenied: isPermissionDeniedError(error),
+          path,
+          message: info.error,
+        });
+      }
+    },
+    (error) => {
+      const info = buildFirestoreErrorInfo(error, OperationType.GET, path);
+      console.warn('Firestore Master Bible Subscription Notice:', JSON.stringify(info));
+      onError({
+        permissionDenied: isPermissionDeniedError(error),
+        path,
+        message: info.error,
+      });
+    }
+  );
+}
+
 export async function deleteMasterBibleFromFirestore(uid: string): Promise<SyncWriteResult> {
   const metaPath = FIRESTORE_PATHS.masterBibleMetaDoc(uid);
   try {
