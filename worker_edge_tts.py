@@ -232,8 +232,8 @@ async def generate_audio(request: Request) -> JSONResponse:
         role = item.get("role", "narator")
         voice = item.get("voice", default_voice)
         pause_ms = item.get("pauseMs", 0)
-        if not isinstance(text, str) or not text.strip() or len(text) > 10000:
-            raise HTTPException(status_code=400, detail="Teks setiap segmen wajib diisi dan maksimal 10.000 karakter.")
+        if not isinstance(text, str) or not text.strip() or len(text) > 80000:
+            raise HTTPException(status_code=400, detail="Teks setiap segmen wajib diisi dan maksimal 80.000 karakter.")
         if not isinstance(role, str) or not role.strip() or len(role) > 50:
             raise HTTPException(status_code=400, detail="Role segmen tidak valid.")
         if voice not in ALLOWED_VOICES:
