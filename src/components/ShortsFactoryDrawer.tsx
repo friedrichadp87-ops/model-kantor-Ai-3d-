@@ -23,6 +23,7 @@ import {
   X,
 } from 'lucide-react';
 import type { LightingPreset } from '../office/types';
+import { clearActiveApiWorkContext, setActiveApiWorkContext } from '../firebase/apiFetch';
 import {
   PROTESTANT_BIBLE_BOOKS,
   PROTESTANT_BIBLE_GROUPS,
@@ -66,6 +67,7 @@ export interface ShortsBriefPrefill {
 }
 
 export interface ShortsProductionEvent {
+  runId?: string;
   phase: 'start' | 'done' | 'error';
   channelName: string;
   title: string;
@@ -343,7 +345,8 @@ export function ShortsFactoryDrawer({
     });
 
     setProducing(true);
-    onProductionEvent({ phase: 'start', channelName: ch.name, title: title.trim() });
+    setActiveApiWorkContext(jobId, channelId);
+    onProductionEvent({ runId: jobId, phase: 'start', channelName: ch.name, title: title.trim() });
 
     try {
       const localVerseContext = buildLocalVerseContext(notes, bibleReference);
@@ -369,7 +372,7 @@ export function ShortsFactoryDrawer({
       if (!res.ok || !data.package) {
         const errMsg = data.error ?? 'Pipeline produksi Shorts gagal dijalankan.';
         setProduceError(errMsg);
-        onProductionEvent({ phase: 'error', channelName: ch.name, title: title.trim() });
+        onProductionEvent({ runId: jobId, phase: 'error', channelName: ch.name, title: title.trim() });
         return;
       }
 
@@ -400,6 +403,7 @@ export function ShortsFactoryDrawer({
       });
 
       onProductionEvent({
+        runId: jobId,
         phase: 'done',
         channelName: ch.name,
         title: pkg.title,
@@ -407,8 +411,9 @@ export function ShortsFactoryDrawer({
       });
     } catch {
       setProduceError('Koneksi ke server Pabrik Shorts terputus.');
-      onProductionEvent({ phase: 'error', channelName: ch.name, title: title.trim() });
+      onProductionEvent({ runId: jobId, phase: 'error', channelName: ch.name, title: title.trim() });
     } finally {
+      clearActiveApiWorkContext(jobId);
       setProducing(false);
     }
   };
