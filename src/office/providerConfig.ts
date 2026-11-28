@@ -8,6 +8,80 @@ export type ElevenLabsModelId =
   | 'eleven_flash_v2_5'
   | 'eleven_turbo_v2_5';
 
+export const EDGE_TTS_VOICE_PRESETS = [
+  { id: 'id-ID-ArdiNeural', label: 'Ardi · Pria Indonesia · Hangat/Tegas' },
+  { id: 'id-ID-GadisNeural', label: 'Gadis · Wanita Indonesia · Dongeng Lembut' },
+  { id: 'en-US-AndrewNeural', label: 'Andrew · Pria Inggris · Storytelling' },
+  { id: 'en-US-AriaNeural', label: 'Aria · Wanita Inggris · Ekspresif' },
+] as const;
+
+export type EdgeTtsVoiceId = (typeof EDGE_TTS_VOICE_PRESETS)[number]['id'];
+export type VoiceProvider = 'edge-tts' | 'elevenlabs';
+
+export interface EdgeTtsConfig {
+  workerUrl: string;
+  voice: EdgeTtsVoiceId;
+  rate: string;
+  pitch: string;
+}
+
+export function normalizeEdgeTtsWorkerUrl(raw: string): { ok: true; url: string } | { ok: false; error: string } {
+  const value = raw.trim();
+  if (!value) return { ok: false, error: 'URL Windows Production Worker wajib diisi.' };
+
+  let parsed: URL;
+  try {
+    parsed = new URL(value);
+  } catch {
+    return { ok: false, error: 'URL Worker tidak valid. Contoh: http://127.0.0.1:8765.' };
+  }
+
+  const host = parsed.hostname.toLowerCase();
+  const isLoopback = host === 'localhost' || host === '127.0.0.1' || host === '[::1]' || host === '::1';
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && isLoopback)) {
+    return { ok: false, error: 'Worker harus memakai HTTPS, kecuali Worker lokal pada localhost/127.0.0.1.' };
+  }
+  if (parsed.username || parsed.password || parsed.search || parsed.hash) {
+    return { ok: false, error: 'URL Worker tidak boleh berisi kredensial, query, atau hash.' };
+  }
+
+  return {
+    ok: true,
+    url: `${parsed.protocol}//${parsed.host}${parsed.pathname}`.replace(/\/+$/, ''),
+  };
+}
+
+export function validateEdgeTtsSettings(input: {
+  workerUrl?: unknown;
+  voice?: unknown;
+  rate?: unknown;
+  pitch?: unknown;
+}): { ok: true; value: EdgeTtsConfig } | { ok: false; error: string } {
+  const url = normalizeEdgeTtsWorkerUrl(typeof input.workerUrl === 'string' ? input.workerUrl : '');
+  if (!url.ok) return url;
+
+  const voice = typeof input.voice === 'string' && EDGE_TTS_VOICE_PRESETS.some((preset) => preset.id === input.voice)
+    ? input.voice as EdgeTtsVoiceId
+    : null;
+  if (!voice) return { ok: false, error: 'Pilih salah satu preset suara Edge-TTS yang tersedia.' };
+
+  const rate = typeof input.rate === 'string' && /^[+-]?(?:0|[1-2]?\d|30)%$/.test(input.rate)
+    ? input.rate
+    : null;
+  if (!rate || Number(rate.replace('%', '')) < -30 || Number(rate.replace('%', '')) > 30) {
+    return { ok: false, error: 'Rate harus berada pada rentang -30% sampai +30%.' };
+  }
+
+  const pitch = typeof input.pitch === 'string' && /^[+-]?(?:0|[1-2]?\d|20)Hz$/.test(input.pitch)
+    ? input.pitch
+    : null;
+  if (!pitch || Number(pitch.replace('Hz', '')) < -20 || Number(pitch.replace('Hz', '')) > 20) {
+    return { ok: false, error: 'Pitch harus berada pada rentang -20Hz sampai +20Hz.' };
+  }
+
+  return { ok: true, value: { workerUrl: url.url, voice, rate, pitch } };
+}
+
 export interface OllamaConfig {
   enabled: boolean;
   baseUrl: string;
@@ -30,6 +104,8 @@ export interface ElevenLabsConfig {
 
 export interface ProviderConfig {
   llmRouting: LlmRoutingMode;
+  voiceProvider: VoiceProvider;
+  edgeTts: EdgeTtsConfig;
   ollama: OllamaConfig;
   gemini: GeminiProviderConfig;
   elevenlabs: ElevenLabsConfig;
@@ -120,6 +196,13 @@ export function createDefaultProviderConfig(): ProviderConfig {
     gemini: {
       textModel: 'gemini-4-hydrogen',
     },
+    voiceProvider: 'edge-tts',
+    edgeTts: {
+      workerUrl: 'http://127.0.0.1:8765',
+      voice: 'id-ID-ArdiNeural',
+      rate: '-5%',
+      pitch: '+0Hz',
+    },
     elevenlabs: {
       enabled: true,
       voiceId: '21m00Tcm4TlvDq8ikWAM',
@@ -187,6 +270,17 @@ export function mergeProviderConfig(raw: unknown): ProviderConfig {
       ? 'gemini-3.1-flash-lite'
       : 'gemini-4-hydrogen';
 
+  const edgeRaw = (obj.edgeTts && typeof obj.edgeTts === 'object'
+    ? obj.edgeTts
+    : {}) as Record<string, unknown>;
+  const edgeSettings = validateEdgeTtsSettings({
+    workerUrl: typeof edgeRaw.workerUrl === 'string' ? edgeRaw.workerUrl : defaults.edgeTts.workerUrl,
+    voice: typeof edgeRaw.voice === 'string' ? edgeRaw.voice : defaults.edgeTts.voice,
+    rate: typeof edgeRaw.rate === 'string' ? edgeRaw.rate : defaults.edgeTts.rate,
+    pitch: typeof edgeRaw.pitch === 'string' ? edgeRaw.pitch : defaults.edgeTts.pitch,
+  });
+  const voiceProvider: VoiceProvider = obj.voiceProvider === 'elevenlabs' ? 'elevenlabs' : 'edge-tts';
+
   const elevenRaw = (obj.elevenlabs && typeof obj.elevenlabs === 'object'
     ? obj.elevenlabs
     : {}) as Record<string, unknown>;
@@ -197,6 +291,8 @@ export function mergeProviderConfig(raw: unknown): ProviderConfig {
 
   return {
     llmRouting,
+    voiceProvider,
+    edgeTts: edgeSettings.ok ? edgeSettings.value : defaults.edgeTts,
     ollama: {
       enabled:
         typeof ollamaRaw.enabled === 'boolean' ? ollamaRaw.enabled : defaults.ollama.enabled,
@@ -241,6 +337,10 @@ export function validateProviderConfig(
     return { ok: false, error: 'Nama model Ollama harus 2–80 karakter (contoh: llama3.2).' };
   }
 
+  const edgeCheck = validateEdgeTtsSettings(cfg.edgeTts);
+  if (cfg.voiceProvider === 'edge-tts' && !edgeCheck.ok) return edgeCheck;
+  const validatedEdgeTts = edgeCheck.ok ? edgeCheck.value : createDefaultProviderConfig().edgeTts;
+
   const voiceId = cfg.elevenlabs.voiceId.trim();
   if (voiceId.length < 3 || voiceId.length > 80) {
     return { ok: false, error: 'Voice ID ElevenLabs tidak valid (minimal 3 karakter).' };
@@ -257,6 +357,8 @@ export function validateProviderConfig(
     ok: true,
     value: {
       ...cfg,
+      voiceProvider: cfg.voiceProvider === 'edge-tts' ? 'edge-tts' : 'elevenlabs',
+      edgeTts: validatedEdgeTts,
       ollama: {
         ...cfg.ollama,
         baseUrl: urlCheck.url,

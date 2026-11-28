@@ -25,6 +25,7 @@ import type { FirebaseAuthUserSummary } from '../firebase/officeSync';
 import {
   ELEVENLABS_MODELS,
   ELEVENLABS_VOICE_PRESETS,
+  EDGE_TTS_VOICE_PRESETS,
   GEMINI_TEXT_MODELS,
   OLLAMA_MODEL_PRESETS,
   normalizeOllamaBaseUrl,
@@ -39,6 +40,7 @@ import {
 } from '../office/providerConfig';
 import type { LightingPreset } from '../office/types';
 import { YoutubeSettingsPanel } from './YoutubeSettingsPanel';
+import { buildEdgeTtsPayload, generateEdgeTtsAudio } from '../office/edgeTtsClient';
 
 export type ProviderTab = 'ollama' | 'gemini' | 'elevenlabs' | 'firebase' | 'youtube';
 
@@ -163,7 +165,7 @@ export function ProviderSettingsDrawer({
     }
     setDraft(check.value);
     onSaveConfig(check.value);
-    setSaveNotice('Konfigurasi koneksi AI disimpan dan aktif untuk semua 39 agen (3 lantai).');
+    setSaveNotice('Konfigurasi provider disimpan ke workspace Firestore dan aktif untuk seluruh lantai.');
   };
 
   const handleTestOllama = async () => {
@@ -295,6 +297,40 @@ export function ProviderSettingsDrawer({
         status: 'error',
         message: 'Gagal menghubungi endpoint uji Gemini API.',
       });
+    }
+  };
+
+  const handleGenerateEdgeTtsSample = async (e: FormEvent) => {
+    e.preventDefault();
+    setTtsError(null);
+    setTtsAudioUrl(null);
+
+    const voice = draft.edgeTts.voice;
+    const text = ttsText.trim();
+    if (text.length < 3 || text.length > 800) {
+      setTtsError('Teks uji suara harus antara 3 hingga 800 karakter.');
+      return;
+    }
+
+    setTtsLoading(true);
+    onVoiceSynthesisEvent?.('start', `Tes suara Edge-TTS (${voice})`);
+    try {
+      const payload = buildEdgeTtsPayload(
+        `edge-tts-test-${Date.now()}`,
+        voice,
+        draft.edgeTts.rate,
+        draft.edgeTts.pitch,
+        [{ role: 'narator', voice, text, pauseMs: 0 }]
+      );
+      const result = await generateEdgeTtsAudio(draft.edgeTts.workerUrl, payload);
+      setTtsAudioUrl(result.dataUrl);
+      onVoiceSynthesisEvent?.('done', `Tes suara Edge-TTS selesai (${result.characterCount ?? text.length} karakter)`);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Worker Edge-TTS tidak dapat dihubungi.';
+      setTtsError(message);
+      onVoiceSynthesisEvent?.('error', `Tes suara Edge-TTS gagal: ${message}`);
+    } finally {
+      setTtsLoading(false);
     }
   };
 
@@ -460,7 +496,7 @@ export function ProviderSettingsDrawer({
             [
               { id: 'ollama', label: 'Ollama (Localhost)', Icon: Cpu },
               { id: 'gemini', label: 'Gemini API', Icon: Sparkles },
-              { id: 'elevenlabs', label: 'ElevenLabs (Suara)', Icon: Volume2 },
+              { id: 'elevenlabs', label: 'Suara & TTS', Icon: Volume2 },
               { id: 'firebase', label: 'Firebase Console', Icon: Cloud },
               { id: 'youtube', label: 'YouTube OAuth', Icon: Youtube },
             ] as const
@@ -1047,6 +1083,149 @@ export function ProviderSettingsDrawer({
 
         {activeTab === 'elevenlabs' && (
           <div className="space-y-3">
+            <div className={`rounded-lg border p-3 ${panelBg}`}>
+              <label className="text-xs font-semibold" htmlFor="voice-provider-choice">Provider Suara</label>
+              <select
+                id="voice-provider-choice"
+                value={draft.voiceProvider}
+                onChange={(e) => {
+                  setDraft((prev) => ({
+                    ...prev,
+                    voiceProvider: e.target.value === 'edge-tts' ? 'edge-tts' : 'elevenlabs',
+                  }));
+                  setTtsError(null);
+                  setTtsAudioUrl(null);
+                  setSaveNotice(null);
+                }}
+                className={`mt-1 w-full rounded-lg border px-2.5 py-2 text-xs ${inputSurface}`}
+              >
+                <option value="edge-tts">Edge-TTS (Gratis via Windows Worker)</option>
+                <option value="elevenlabs">ElevenLabs (API Berbayar)</option>
+              </select>
+              <p className={`mt-1.5 text-[11px] ${mutedText}`}>
+                Pilih salah satu provider untuk membuat audio narasi. Konfigurasi ElevenLabs tetap tersimpan meskipun Edge-TTS sedang dipilih.
+              </p>
+            </div>
+
+            {draft.voiceProvider === 'edge-tts' && (
+              <div className={`space-y-3 rounded-lg border p-3 ${panelBg}`}>
+                <div className="flex items-center justify-between gap-2">
+                  <div>
+                    <h3 className="text-xs font-bold">Edge-TTS · Windows Production Worker</h3>
+                    <p className={`mt-0.5 text-[11px] ${mutedText}`}>Sintesis narasi melalui Worker Windows dengan Firebase ID Token.</p>
+                  </div>
+                  <span className="rounded-full border border-emerald-500/40 px-2 py-1 text-[10px] font-semibold text-emerald-500">Tanpa API key ElevenLabs</span>
+                </div>
+
+                <div>
+                  <label htmlFor="edge-tts-worker-url" className="text-xs font-semibold">URL Windows Production Worker</label>
+                  <input
+                    id="edge-tts-worker-url"
+                    type="url"
+                    value={draft.edgeTts.workerUrl}
+                    onChange={(e) => {
+                      setDraft((prev) => ({ ...prev, edgeTts: { ...prev.edgeTts, workerUrl: e.target.value } }));
+                      setSaveNotice(null);
+                    }}
+                    placeholder="http://127.0.0.1:8765"
+                    className={`mt-1 w-full rounded-lg border px-2.5 py-1.5 font-mono text-xs ${inputSurface}`}
+                  />
+                  <p className={`mt-1 text-[10px] ${mutedText}`}>Alamat localhost hanya dapat dipakai saat browser dan Worker berada di PC yang sama. URL remote wajib HTTPS.</p>
+                </div>
+
+                <div>
+                  <label htmlFor="edge-tts-voice" className="text-xs font-semibold">Suara Narator Default</label>
+                  <select
+                    id="edge-tts-voice"
+                    value={draft.edgeTts.voice}
+                    onChange={(e) => {
+                      setDraft((prev) => ({ ...prev, edgeTts: { ...prev.edgeTts, voice: e.target.value as ProviderConfig['edgeTts']['voice'] } }));
+                      setSaveNotice(null);
+                    }}
+                    className={`mt-1 w-full rounded-lg border px-2.5 py-1.5 text-xs ${inputSurface}`}
+                  >
+                    {EDGE_TTS_VOICE_PRESETS.map((voice) => (
+                      <option key={voice.id} value={voice.id}>{voice.label} · {voice.id}</option>
+                    ))}
+                  </select>
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <label htmlFor="edge-tts-rate" className="text-xs font-semibold">Kecepatan / Rate</label>
+                      <span className="font-mono text-xs">{draft.edgeTts.rate}</span>
+                    </div>
+                    <input
+                      id="edge-tts-rate"
+                      type="range"
+                      min={-30}
+                      max={30}
+                      step={1}
+                      value={Number(draft.edgeTts.rate.replace('%', ''))}
+                      onChange={(e) => {
+                        const value = Number(e.target.value);
+                        setDraft((prev) => ({ ...prev, edgeTts: { ...prev.edgeTts, rate: value > 0 ? `+${value}%` : `${value}%` } }));
+                        setSaveNotice(null);
+                      }}
+                      className="mt-2 w-full accent-blue-600"
+                    />
+                    <p className={`text-[10px] ${mutedText}`}>Rentang -30% sampai +30%. Default -5% untuk tempo dongeng.</p>
+                  </div>
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <label htmlFor="edge-tts-pitch" className="text-xs font-semibold">Nada / Pitch</label>
+                      <span className="font-mono text-xs">{draft.edgeTts.pitch}</span>
+                    </div>
+                    <input
+                      id="edge-tts-pitch"
+                      type="range"
+                      min={-20}
+                      max={20}
+                      step={1}
+                      value={Number(draft.edgeTts.pitch.replace('Hz', ''))}
+                      onChange={(e) => {
+                        const value = Number(e.target.value);
+                        setDraft((prev) => ({ ...prev, edgeTts: { ...prev.edgeTts, pitch: value > 0 ? `+${value}Hz` : `${value}Hz` } }));
+                        setSaveNotice(null);
+                      }}
+                      className="mt-2 w-full accent-blue-600"
+                    />
+                    <p className={`text-[10px] ${mutedText}`}>Rentang -20Hz sampai +20Hz.</p>
+                  </div>
+                </div>
+
+                <form onSubmit={(e) => void handleGenerateEdgeTtsSample(e)} className="space-y-2.5 rounded-lg border p-3">
+                  <label htmlFor={ttsInputId} className="text-xs font-semibold">Tes Suara Narator</label>
+                  <textarea
+                    id={ttsInputId}
+                    rows={3}
+                    value={ttsText}
+                    onChange={(e) => setTtsText(e.target.value)}
+                    className={`mt-1 w-full resize-none rounded-lg border px-2.5 py-1.5 text-xs leading-relaxed ${inputSurface}`}
+                  />
+                  {ttsError && <p role="alert" className="text-[11px] text-rose-500">{ttsError}</p>}
+                  {ttsAudioUrl && (
+                    <div className="flex flex-wrap items-center gap-2">
+                      <audio controls src={ttsAudioUrl} className="h-8 min-w-0 flex-1" />
+                      <a href={ttsAudioUrl} download="tes-suara-edge-tts.mp3" className={`rounded-md border px-2 py-1 text-[11px] ${subtleBorder}`}>Unduh MP3</a>
+                    </div>
+                  )}
+                  <button
+                    type="submit"
+                    disabled={ttsLoading}
+                    className={`inline-flex w-full items-center justify-center gap-1.5 rounded-lg px-3 py-2 text-xs font-semibold disabled:opacity-60 ${isDark ? 'bg-sky-600 text-white' : 'bg-slate-900 text-white'}`}
+                  >
+                    {ttsLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Volume2 className="h-3.5 w-3.5" />}
+                    {ttsLoading ? 'Membuat audio...' : 'Tes Suara Narator'}
+                  </button>
+                </form>
+              </div>
+            )}
+
+            {draft.voiceProvider === 'elevenlabs' && (
+              <>
+
             {/* ElevenLabs Server Key Readiness Banner (Zero browser API key input) */}
             <div className={`rounded-lg border p-3 ${panelBg}`}>
               <div className="flex flex-wrap items-start justify-between gap-2">
@@ -1306,6 +1485,8 @@ export function ProviderSettingsDrawer({
                 </button>
               </form>
             </div>
+              </>
+            )}
           </div>
         )}
 

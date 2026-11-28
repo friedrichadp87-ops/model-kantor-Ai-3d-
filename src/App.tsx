@@ -155,6 +155,7 @@ export default function App() {
   const [mediaStudioOpen, setMediaStudioOpen] = useState<boolean>(false);
   const [mediaStudioPrefill, setMediaStudioPrefill] = useState<MediaStudioPrefill | null>(null);
   const [mediaItems, setMediaItems] = useState<GeneratedMediaItem[]>([]);
+  const [editorNarrationAudioUrl, setEditorNarrationAudioUrl] = useState<string | null>(null);
   const [projectedVideoId, setProjectedVideoId] = useState<string | null>(null);
   const [mountedImageUrl, setMountedImageUrl] = useState<string | null>(null);
   const [shortsFactoryOpen, setShortsFactoryOpen] = useState<boolean>(false);
@@ -1545,6 +1546,13 @@ export default function App() {
     []
   );
 
+  const handleEditorNarrationAudioCreated = useCallback((dataUrl: string) => {
+    setEditorNarrationAudioUrl(dataUrl);
+    setActivityLog((prev) => appendActivityLog(prev, [
+      createStudioActivityEntry('Audio narasi Edge-TTS dari Video Editor siap dipakai pada proyek produksi'),
+    ]));
+  }, []);
+
   const handleMediaCreated = useCallback((item: GeneratedMediaItem) => {
     setMediaItems((prev) => [item, ...prev].slice(0, 12));
     const msg =
@@ -1970,6 +1978,8 @@ export default function App() {
         floorWorkflowFloorId={floorWorkflowFloorId}
         controlsOpen={controlsOpen}
         providerConfig={providerConfig}
+        editorNarrationAudioUrl={editorNarrationAudioUrl}
+        onNarrationAudioCreated={handleEditorNarrationAudioCreated}
         selectedSpecialistId={selectedSpecialistId}
         masterBible={masterBible}
         masterBibleBusy={masterBibleBusy}

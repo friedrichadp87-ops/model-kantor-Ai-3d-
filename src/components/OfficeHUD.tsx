@@ -65,7 +65,6 @@ import {
 import { usePWA } from '../pwa/usePWA';
 import { PWAStatusToast } from './PWAInstallAndUpdate';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
-
 interface OfficeHUDProps {
   buildingState: BuildingSimulationState;
   floorView: FloorViewMode;
@@ -99,6 +98,8 @@ interface OfficeHUDProps {
   floorWorkflowFloorId: FloorId | null;
   controlsOpen: boolean;
   providerConfig: ProviderConfig;
+  editorNarrationAudioUrl: string | null;
+  onNarrationAudioCreated: (dataUrl: string) => void;
   selectedSpecialistId: SpecialistAgentId | null;
   masterBible: LocalBibleDatabase | null;
   masterBibleBusy: boolean;
@@ -228,6 +229,7 @@ export function OfficeHUD({
   floorWorkflowFloorId,
   controlsOpen,
   providerConfig,
+  editorNarrationAudioUrl,
   selectedSpecialistId,
   masterBible,
   masterBibleBusy,
@@ -259,6 +261,7 @@ export function OfficeHUD({
   onResetProviderConfig,
   onOpenChannelTemplates,
   onVoiceSynthesisEvent,
+  onNarrationAudioCreated,
   onSelectSpecialist,
   onSubmitSpecialistTask,
   onRunCommand,
@@ -525,6 +528,7 @@ export function OfficeHUD({
                 masterBibleVerseCount={masterBible?.report.indexedVerseCount ?? 0}
                 channelTemplates={channelTemplates}
                 providerConfig={providerConfig}
+                editorNarrationAudioUrl={editorNarrationAudioUrl}
                 onClose={onToggleOrchestrator}
                 onOpenShortsFactory={onToggleShortsFactory}
                 onOpenProviderSettings={onOpenProviderSettingsFromOrchestrator}
@@ -583,6 +587,10 @@ export function OfficeHUD({
                 onMediaCreated={onMediaCreated}
                 onProjectVideo={onProjectVideo}
                 onMountGalleryImage={onMountGalleryImage}
+                providerConfig={providerConfig}
+                editorNarrationAudioUrl={editorNarrationAudioUrl}
+                onVoiceSynthesisEvent={onVoiceSynthesisEvent}
+                onNarrationAudioCreated={onNarrationAudioCreated}
               />
             )}
 
