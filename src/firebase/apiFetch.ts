@@ -187,7 +187,8 @@ export function installAuthenticatedApiFetch(): void {
       requestUrl.origin !== window.location.origin ||
       !requestUrl.pathname.startsWith('/api/') ||
       requestUrl.pathname === '/api/health' ||
-      requestUrl.pathname === '/api/pwa/remote-version'
+      requestUrl.pathname === '/api/pwa/remote-version' ||
+      requestUrl.pathname.startsWith('/api/youtube/')
     ) {
       return originalFetch(input, init);
     }
