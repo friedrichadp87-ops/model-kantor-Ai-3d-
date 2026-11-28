@@ -50,9 +50,13 @@ async function getMasterBible(uid: string): Promise<LocalBibleDatabase | null> {
         // Firestore is authoritative: a successful "no Master Bible uploaded" response
         // must not resurrect an obsolete IndexedDB copy from another upload/version.
         if (cloud.ok) return cloud.database;
+        if (cloud.permissionDenied) {
+          // A permission error is not an offline condition. Do not let an old local
+          // edition silently replace the owner's central Firestore source.
+          return null;
+        }
       } catch {
-        // Offline fallback uses the last locally cached copy; Firestore stays authoritative
-        // whenever it can be reached and contains the Master Bible.
+        // Only a network/runtime failure reaches the offline fallback below.
       }
       return loadMasterBibleFromIndexedDb().catch(() => null);
     })();
