@@ -180,6 +180,17 @@ export interface SanitizedMasterBibleChunkPayload {
   updatedAt: string;
 }
 
+export function selectMasterBibleChunksForUpload(
+  meta: Partial<SanitizedMasterBibleMetaPayload> | null | undefined,
+  chunks: Array<Partial<SanitizedMasterBibleChunkPayload>>
+): Array<Partial<SanitizedMasterBibleChunkPayload>> {
+  if (meta?.uploadId) {
+    return chunks.filter((chunk) => chunk.uploadId === meta.uploadId);
+  }
+  // Backward compatibility for existing unversioned chunks uploaded by older builds.
+  return chunks.filter((chunk) => !chunk.uploadId);
+}
+
 export interface ChunkedMasterBiblePayload {
   meta: SanitizedMasterBibleMetaPayload;
   chunks: Array<{
