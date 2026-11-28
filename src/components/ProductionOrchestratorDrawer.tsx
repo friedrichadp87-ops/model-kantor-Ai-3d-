@@ -660,7 +660,7 @@ export function ProductionOrchestratorDrawer({
       // ---------------------------------------------------------------
       // TAHAP 6: Audio Narasi (ElevenLabs Channel Key Routing)
       // ---------------------------------------------------------------
-      let narrationAudioDataUrl: string | undefined;
+      let narrationAudioDataUrl: string | undefined = editorNarrationAudioUrl ?? undefined;
       if (input.generateAudio) {
         updateStage('narration_audio', 'running', 'Mensintesis suara narasi ElevenLabs...');
         runStageEvent(bp, 'narration_audio', 'start');
