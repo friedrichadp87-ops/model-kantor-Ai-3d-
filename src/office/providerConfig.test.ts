@@ -53,6 +53,8 @@ test('mergeProviderConfig safely restores defaults on corrupt or partial input',
   assert.equal(merged.elevenlabs.modelId, 'eleven_flash_v2_5');
   assert.equal(merged.elevenlabs.stability, 1);
   assert.equal(merged.elevenlabs.similarityBoost, 0);
+  assert.equal(merged.voiceProvider, 'elevenlabs');
+  assert.equal(merged.edgeTts.workerUrl, 'http://127.0.0.1:8765');
 });
 
 test('validateProviderConfig enforces Ollama enabled when routing is ollama-only', () => {
@@ -100,4 +102,31 @@ test('validateElevenLabsTtsRequest validates narration length and voiceId format
     similarityBoost: 0.8,
   });
   assert.equal(ok.ok, true);
+});
+
+
+test('Edge-TTS settings merge and validate rate, pitch, voice and Worker URL', () => {
+  const defaults = createDefaultProviderConfig();
+  assert.equal(defaults.voiceProvider, 'elevenlabs');
+  assert.equal(defaults.edgeTts.voice, 'id-ID-ArdiNeural');
+  assert.equal(defaults.edgeTts.rate, '-5%');
+  assert.equal(defaults.edgeTts.pitch, '+0Hz');
+
+  const merged = mergeProviderConfig({
+    voiceProvider: 'edge-tts',
+    edgeTts: {
+      workerUrl: 'http://localhost:8765/',
+      voice: 'id-ID-GadisNeural',
+      rate: '-30%',
+      pitch: '+20Hz',
+    },
+  });
+  assert.equal(merged.voiceProvider, 'edge-tts');
+  assert.equal(merged.edgeTts.workerUrl, 'http://localhost:8765');
+  assert.equal(merged.edgeTts.voice, 'id-ID-GadisNeural');
+  assert.equal(merged.edgeTts.rate, '-30%');
+  assert.equal(merged.edgeTts.pitch, '+20Hz');
+
+  const invalid = { ...defaults, edgeTts: { ...defaults.edgeTts, rate: '-40%' } };
+  assert.equal(validateProviderConfig(invalid).ok, false);
 });
