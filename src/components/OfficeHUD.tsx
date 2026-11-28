@@ -65,8 +65,6 @@ import {
 import { usePWA } from '../pwa/usePWA';
 import { PWAStatusToast } from './PWAInstallAndUpdate';
 import { WorkspaceSidebar } from './WorkspaceSidebar';
-import type { ProviderConfig } from '../office/providerConfig';
-
 interface OfficeHUDProps {
   buildingState: BuildingSimulationState;
   floorView: FloorViewMode;
