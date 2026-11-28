@@ -338,7 +338,8 @@ export function validateProviderConfig(
   }
 
   const edgeCheck = validateEdgeTtsSettings(cfg.edgeTts);
-  if (!edgeCheck.ok) return edgeCheck;
+  if (cfg.voiceProvider === 'edge-tts' && !edgeCheck.ok) return edgeCheck;
+  const validatedEdgeTts = edgeCheck.ok ? edgeCheck.value : createDefaultProviderConfig().edgeTts;
 
   const voiceId = cfg.elevenlabs.voiceId.trim();
   if (voiceId.length < 3 || voiceId.length > 80) {
@@ -357,7 +358,7 @@ export function validateProviderConfig(
     value: {
       ...cfg,
       voiceProvider: cfg.voiceProvider === 'edge-tts' ? 'edge-tts' : 'elevenlabs',
-      edgeTts: edgeCheck.value,
+      edgeTts: validatedEdgeTts,
       ollama: {
         ...cfg.ollama,
         baseUrl: urlCheck.url,
