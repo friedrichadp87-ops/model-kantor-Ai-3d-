@@ -76,7 +76,11 @@ GitHub Actions menjalankan:
 
 Jika pemeriksaan gagal, perbaiki masalahnya sebelum menggabungkan branch ke `main`.
 
-## 6. Catatan deployment
+## 6. Versi Node.js
+
+Repositori menetapkan Node.js 24 melalui file `.nvmrc` dan `package.json`. Firebase JavaScript SDK yang dipakai memerlukan Node.js minimal 24.12. Netlify membaca versi dari `.nvmrc` saat build; runtime Functions mengikuti versi build kecuali ada override runtime khusus pada pengaturan Netlify. Jangan mengunci situs kembali ke Node.js 22 untuk branch ini.
+
+## 7. Catatan deployment
 
 - Deploy Firestore Rules dan environment variables secara manual melalui konsol Firebase/Netlify; perubahan source code saja tidak dapat menerapkan pengaturan cloud tersebut.
 - Setelah merge/deploy, login kembali ke aplikasi. Uji unggah Master Alkitab, buka Dashboard Performa untuk ketiga lantai, lalu buat satu tugas uji agar catatan pertama muncul di Firestore.
