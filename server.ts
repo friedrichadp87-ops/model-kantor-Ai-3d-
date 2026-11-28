@@ -361,11 +361,18 @@ export function createApiApp(): express.Express {
       }
 
       const now = Date.now();
-      const current = apiRateWindows.get(claims.sub);
+      const route = req.originalUrl || req.path;
+      const isProviderHeavyRoute =
+        /(?:agent-task|devotional\/research|shorts\/(?:produce|guardian)|bible-stories\/plan|bible-facts\/research|pipeline\/(?:plan-and-script|scene-keyframe|scene-animate|final-qc)|studio\/(?:image|video))/.test(route);
+      const bucketKey = `${claims.sub}:${isProviderHeavyRoute ? 'provider-heavy' : 'general'}`;
+      const bucketLimit = isProviderHeavyRoute ? 45 : 180;
+      const current = apiRateWindows.get(bucketKey);
       if (!current || now - current.startedAt >= 60_000) {
-        apiRateWindows.set(claims.sub, { startedAt: now, count: 1 });
-      } else if (++current.count > 30) {
-        res.status(429).json({ error: 'Batas sementara 30 permintaan API per menit tercapai. Coba kembali sebentar lagi.' });
+        apiRateWindows.set(bucketKey, { startedAt: now, count: 1 });
+      } else if (++current.count > bucketLimit) {
+        res.status(429).json({
+          error: `Batas sementara ${bucketLimit} permintaan per menit untuk kategori API ini tercapai. Coba kembali sebentar lagi.`,
+        });
         return;
       }
 
