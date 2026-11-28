@@ -19,6 +19,7 @@ import {
   subscribeAuthUser,
   subscribeShortsQueue,
   subscribeWorkHistory,
+  subscribeMasterBible,
   appendWorkHistoryToFirestore,
   subscribeWorkspaceSettings,
   syncAgentTaskToFirestore,
@@ -390,8 +391,34 @@ export default function App() {
       handleSubError
     );
 
-    // Sync Master Alkitab Terjemahan Baru (TB) bi-directionally with Firebase Cloud Firestore
+    // Sync the building-wide Master Bible with Firestore, then listen for updates from
+    // other signed-in devices so all three floors keep using the same uploaded edition.
     let bibleSyncActive = true;
+    let unsubscribeMasterBible: (() => void) | null = null;
+    const attachMasterBibleListener = () => {
+      if (unsubscribeMasterBible || !bibleSyncActive) return;
+      unsubscribeMasterBible = subscribeMasterBible(
+        uid,
+        (cloudBible) => {
+          if (!bibleSyncActive) return;
+          if (!cloudBible) {
+            clearApiMasterBibleCache();
+            setMasterBible(null);
+            setMasterBibleSyncMode('local-only');
+            setMasterBibleSyncNotice('Belum ada Master Alkitab di Firestore untuk akun ini.');
+            void clearMasterBibleFromIndexedDb();
+            return;
+          }
+          setMasterBible(cloudBible);
+          setMasterBibleSyncMode('firebase-synced');
+          setMasterBibleSyncNotice(null);
+          setApiMasterBibleCache(uid, cloudBible);
+          void saveMasterBibleToIndexedDb(cloudBible).catch(() => undefined);
+        },
+        handleSubError
+      );
+    };
+
     void loadMasterBibleFromFirestore(uid).then(async (cloudRes) => {
       if (!bibleSyncActive) return;
       if (!cloudRes.ok && cloudRes.permissionDenied) {
@@ -419,12 +446,17 @@ export default function App() {
             ),
           ])
         );
+        attachMasterBibleListener();
         return;
       }
 
       // Firestore does not have Master Alkitab yet — push local IndexedDB copy automatically!
       const localBible = masterBibleRef.current ?? (await loadMasterBibleFromIndexedDb());
-      if (!bibleSyncActive || !localBible) return;
+      if (!bibleSyncActive) return;
+      if (!localBible) {
+        attachMasterBibleListener();
+        return;
+      }
       const pushRes = await syncMasterBibleToFirestore(uid, localBible);
       if (!bibleSyncActive) return;
       if (pushRes.ok) {
@@ -440,6 +472,7 @@ export default function App() {
             ),
           ])
         );
+        attachMasterBibleListener();
       } else if (pushRes.permissionDenied) {
         setMasterBibleSyncNotice(
           'Alkitab aktif di browser. Tambahkan aturan Firestore Rules untuk masterBible & masterBibleChunks (buka panel Firebase) agar tersimpan di Cloud.'
@@ -452,6 +485,7 @@ export default function App() {
       unsubSettings();
       unsubQueue();
       unsubHistory();
+      unsubscribeMasterBible?.();
     };
   }, [firebaseUser]);
 
