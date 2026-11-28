@@ -55,7 +55,7 @@ export function validateEdgeTtsPayload(
     if (!segment || typeof segment.text !== 'string' || !segment.text.trim()) {
       return { ok: false, error: 'Setiap segmen audio harus memiliki teks.' };
     }
-    if (segment.text.length > 10000) return { ok: false, error: 'Teks per segmen maksimal 10.000 karakter.' };
+    if (segment.text.length > 80000) return { ok: false, error: 'Teks per segmen maksimal 80.000 karakter.' };
     totalLength += segment.text.length;
     if (typeof segment.role !== 'string' || !segment.role.trim() || segment.role.length > 50) {
       return { ok: false, error: 'Role segmen audio tidak valid.' };
