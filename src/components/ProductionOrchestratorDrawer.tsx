@@ -42,6 +42,7 @@ import {
   type PipelineYoutubeMetadata,
   type SceneAnimationMode,
 } from '../office/productionPipeline';
+import { clearActiveApiWorkContext, setActiveApiWorkContext } from '../firebase/apiFetch';
 import type { AvSyncCheckReport } from '../office/floor2And3Workflows';
 import type { ProviderConfig, ServerProviderStatus } from '../office/providerConfig';
 import {
@@ -331,6 +332,7 @@ export function ProductionOrchestratorDrawer({
     };
 
     activeRunIdRef.current = initialRun.id;
+    setActiveApiWorkContext(initialRun.id, input.channelId);
     setRunState(initialRun);
     setRunning(true);
 
@@ -847,6 +849,7 @@ export function ProductionOrchestratorDrawer({
         runStageEvent(bp, 'final_qc', 'error', msg);
       }
     } finally {
+      clearActiveApiWorkContext(initialRun.id);
       setRunning(false);
     }
   };
