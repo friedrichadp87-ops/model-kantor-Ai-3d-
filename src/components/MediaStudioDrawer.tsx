@@ -51,6 +51,7 @@ interface MediaStudioDrawerProps {
   onProjectVideo: (item: GeneratedMediaItem | null) => void;
   onMountGalleryImage: (dataUrl: string | null, label?: string) => void;
   providerConfig: ProviderConfig;
+  editorNarrationAudioUrl: string | null;
   onVoiceSynthesisEvent: (phase: 'start' | 'done' | 'error', label: string) => void;
   onNarrationAudioCreated: (dataUrl: string) => void;
 }
@@ -99,6 +100,7 @@ export function MediaStudioDrawer({
   onProjectVideo,
   onMountGalleryImage,
   providerConfig,
+  editorNarrationAudioUrl,
   onVoiceSynthesisEvent,
   onNarrationAudioCreated,
 }: MediaStudioDrawerProps) {
@@ -253,7 +255,6 @@ export function MediaStudioDrawer({
       );
       const result = await generateEdgeTtsAudio(settings.workerUrl, payload);
       setNarrationAudioUrl(result.dataUrl);
-      onNarrationAudioCreated(result.dataUrl);
       onVoiceSynthesisEvent('done', 'Audio Edge-TTS selesai dari Video Editor');
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Gagal membuat audio narasi Edge-TTS.';
@@ -585,13 +586,13 @@ export function MediaStudioDrawer({
                 className={`w-full resize-y rounded-lg border px-2.5 py-2 text-xs leading-relaxed ${inputSurface}`}
               />
               {narrationError && <p role="alert" className="text-[11px] text-rose-500">{narrationError}</p>}
-              {narrationAudioUrl && (
+              {(narrationAudioUrl || editorNarrationAudioUrl) && (
                 <div className="flex flex-wrap items-center gap-2">
-                  <audio controls src={narrationAudioUrl} className="h-8 min-w-0 flex-1" />
+                  <audio controls src={narrationAudioUrl ?? editorNarrationAudioUrl ?? undefined} className="h-8 min-w-0 flex-1" />
                   <a href={narrationAudioUrl} download="kantor-ai-narasi-edge-tts.mp3" className={`rounded-md border px-2 py-1 text-[11px] ${subtleBorder}`}>
                     <Download className="mr-1 inline h-3 w-3" /> Unduh MP3
                   </a>
-                  <span className="text-[10px] text-emerald-500">Audio siap dipakai pada produksi</span>
+                  <button type="button" onClick={() => onNarrationAudioCreated(narrationAudioUrl ?? editorNarrationAudioUrl!)} className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white">Pasang ke proyek video</button>
                 </div>
               )}
               <button
