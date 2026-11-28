@@ -516,8 +516,8 @@ export function createApiApp(securityOverrides: ApiAppSecurityOverrides = {}): e
       if (!tokenResponse.ok || !tokenData.access_token) {
         throw new Error(tokenData.error_description || tokenData.error || 'Google gagal menukar kode OAuth.');
       }
-      const grantedScopes = String(tokenData.scope ?? '').split(' ');
-      if (!grantedScopes.includes('https://www.googleapis.com/auth/youtube.upload')) {
+      const grantedScopes = typeof tokenData.scope === 'string' ? tokenData.scope.split(' ') : [];
+      if (grantedScopes.length > 0 && !grantedScopes.includes('https://www.googleapis.com/auth/youtube.upload')) {
         throw new Error('Izin youtube.upload belum diberikan. Hubungkan kembali dan setujui izin upload.');
       }
       const oldDoc = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', state.channelId, firebaseToken);
