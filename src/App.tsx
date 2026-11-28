@@ -1880,6 +1880,7 @@ export default function App() {
         simSpeed={simSpeed}
         selectedTarget={selectedTarget}
         tasksByFloorAgent={tasksByFloorAgent}
+        workHistory={workHistory}
         mediaStudioOpen={mediaStudioOpen}
         mediaStudioPrefill={mediaStudioPrefill}
         mediaItems={mediaItems}
