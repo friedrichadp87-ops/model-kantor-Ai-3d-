@@ -56,6 +56,7 @@ import { getFloorByChannelId } from '../office/buildingFloors';
 import type { AgentId, LightingPreset } from '../office/types';
 
 export interface OrchestratorStageEvent {
+  runId?: string;
   channelId: ShortsChannelId;
   agentId: AgentId;
   stageId: PipelineStageId;
@@ -181,6 +182,7 @@ export function ProductionOrchestratorDrawer({
   const [savedNotice, setSavedNotice] = useState<string | null>(null);
 
   const abortRef = useRef<AbortController | null>(null);
+  const activeRunIdRef = useRef<string | null>(null);
 
   const commandInputId = useId();
   const scopeInputId = useId();
@@ -269,6 +271,7 @@ export function ProductionOrchestratorDrawer({
     const stageDef = bp.stages.find((s) => s.id === stageId);
     if (!stageDef) return;
     onStageEvent({
+      runId: activeRunIdRef.current ?? undefined,
       channelId: bp.channelId,
       agentId: stageDef.leadAgentId,
       stageId,
@@ -327,6 +330,7 @@ export function ProductionOrchestratorDrawer({
       srtText: '',
     };
 
+    activeRunIdRef.current = initialRun.id;
     setRunState(initialRun);
     setRunning(true);
 
