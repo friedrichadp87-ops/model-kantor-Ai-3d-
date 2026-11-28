@@ -13,6 +13,7 @@ import {
   sanitizeShortsQueueItemPayload,
   sanitizeUserProfilePayload,
   sanitizeWorkspaceSettingsPayload,
+  sanitizeWorkHistoryRecord,
 } from './officeSync';
 
 test('FIRESTORE_PATHS builds deterministic per-user paths matching firebase-blueprint.json', () => {
@@ -171,4 +172,43 @@ test('formatFirebaseAuthError returns actionable Indonesian guidance for common 
     true
   );
   assert.equal(isPermissionDeniedError(new Error('network error')), false);
+});
+
+test('sanitizeWorkHistoryRecord preserves floor, run, agent and error details while enforcing owner scope', () => {
+  const record = sanitizeWorkHistoryRecord('owner-123', {
+    id: 'run_1_scriptwriter_error',
+    floorId: 2,
+    floorName: 'Lantai 2',
+    channelId: 'bible-stories-3d',
+    channelName: 'Bible Stories 3D',
+    projectId: 'project_1',
+    runId: 'run_1',
+    taskId: 'task_1',
+    agentId: 'scriptwriter',
+    agentName: 'Penulis Naskah',
+    stageId: 'script_arc',
+    stageTitle: 'Penyusunan Naskah',
+    eventType: 'pipeline-stage',
+    phase: 'error',
+    title: 'Kejadian 1 Episode 1',
+    input: 'Susun naskah berdasarkan Master Alkitab.',
+    output: '',
+    error: 'Provider mengembalikan HTTP 429.',
+    detail: 'Kuota habis pada tahap naskah.',
+    provider: 'gemini',
+    model: 'gemini-test',
+    masterBibleActive: true,
+    masterBibleSourceName: 'TB JSON',
+    createdAt: '2026-11-28T10:00:00.000Z',
+    completedAt: '2026-11-28T10:01:00.000Z',
+  });
+
+  assert.equal(record.ownerUid, 'owner-123');
+  assert.equal(record.floorId, 2);
+  assert.equal(record.runId, 'run_1');
+  assert.equal(record.agentId, 'scriptwriter');
+  assert.equal(record.phase, 'error');
+  assert.equal(record.error, 'Provider mengembalikan HTTP 429.');
+  assert.equal(record.masterBibleActive, true);
+  assert.equal(record.masterBibleSourceName, 'TB JSON');
 });
