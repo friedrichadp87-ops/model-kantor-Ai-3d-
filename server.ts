@@ -364,8 +364,8 @@ export function createApiApp(): express.Express {
       const current = apiRateWindows.get(claims.sub);
       if (!current || now - current.startedAt >= 60_000) {
         apiRateWindows.set(claims.sub, { startedAt: now, count: 1 });
-      } else if (++current.count > 120) {
-        res.status(429).json({ error: 'Batas sementara 120 permintaan API per menit tercapai. Coba kembali sebentar lagi.' });
+      } else if (++current.count > 30) {
+        res.status(429).json({ error: 'Batas sementara 30 permintaan API per menit tercapai. Coba kembali sebentar lagi.' });
         return;
       }
 
