@@ -325,7 +325,14 @@ function mapGeminiApiError(err: unknown, fallbackLabel: string): { statusCode: n
   return { statusCode: 500, message: rawMessage };
 }
 
-export function createApiApp(): express.Express {
+export interface ApiAppSecurityOverrides {
+  verifyToken?: typeof verifyFirebaseIdToken;
+  isUidAllowed?: typeof isAllowedFirebaseUid;
+}
+
+export function createApiApp(securityOverrides: ApiAppSecurityOverrides = {}): express.Express {
+  const verifyToken = securityOverrides.verifyToken ?? verifyFirebaseIdToken;
+  const isUidAllowed = securityOverrides.isUidAllowed ?? isAllowedFirebaseUid;
   const app = express();
   const defaultJsonParser = express.json({ limit: '15mb' });
   const apiRateWindows = new Map<string, { startedAt: number; count: number }>();
@@ -354,8 +361,8 @@ export function createApiApp(): express.Express {
     }
 
     try {
-      const claims = await verifyFirebaseIdToken(match[1].trim());
-      if (!isAllowedFirebaseUid(claims.sub)) {
+      const claims = await verifyToken(match[1].trim());
+      if (!isUidAllowed(claims.sub)) {
         res.status(403).json({ error: 'Akun Firebase ini tidak diizinkan menggunakan API Kantor AI.' });
         return;
       }
