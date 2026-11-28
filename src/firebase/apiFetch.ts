@@ -30,7 +30,9 @@ async function getMasterBible(uid: string): Promise<LocalBibleDatabase | null> {
     cachedBiblePromise = (async () => {
       try {
         const cloud = await loadMasterBibleFromFirestore(uid);
-        if (cloud.ok && cloud.database) return cloud.database;
+        // Firestore is authoritative: a successful "no Master Bible uploaded" response
+        // must not resurrect an obsolete IndexedDB copy from another upload/version.
+        if (cloud.ok) return cloud.database;
       } catch {
         // Offline fallback uses the last locally cached copy; Firestore stays authoritative
         // whenever it can be reached and contains the Master Bible.
