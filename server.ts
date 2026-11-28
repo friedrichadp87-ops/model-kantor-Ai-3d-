@@ -65,6 +65,22 @@ import {
 } from './src/office/floor2And3Workflows.ts';
 import { normalizeNetlifyApiPath } from './src/server/netlifyPath.ts';
 import { isValidEnvSecret, sanitizeEnvDefault } from './src/server/envSecrets.ts';
+import {
+  createYoutubeOAuthState,
+  decryptYoutubeRefreshToken,
+  encryptYoutubeRefreshToken,
+  getFirebaseBearerToken,
+  getYoutubeOAuthConfig,
+  isYoutubeChannelId,
+  isYoutubeOAuthConfigured,
+  isYoutubePrivacyStatus,
+  readYoutubeFirestoreDocument,
+  sanitizeYoutubeConnection,
+  verifyYoutubeOAuthState,
+  writeYoutubeFirestoreDocument,
+  deleteYoutubeFirestoreDocument,
+  type YoutubeChannelId,
+} from './src/server/youtubeOAuth.ts';
 
 const execFileAsync = promisify(execFile);
 
@@ -397,6 +413,286 @@ export function createApiApp(securityOverrides: ApiAppSecurityOverrides = {}): e
       return;
     }
     defaultJsonParser(req, res, next);
+  });
+
+
+  // YouTube OAuth + SEO Publisher. OAuth refresh tokens are encrypted server-side;
+  // browser clients receive only short-lived access tokens for resumable uploads.
+  app.get('/api/youtube/status', async (req, res) => {
+    if (!isYoutubeOAuthConfigured()) {
+      res.json({ configured: false, channels: [] });
+      return;
+    }
+    try {
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const channels = await Promise.all(
+        (['daily-faith-inspiration', 'bible-stories-3d', 'bible-facts-mysteries'] as const).map(async (channelId) => {
+          const doc = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', channelId, firebaseToken);
+          return {
+            channelId,
+            connected: doc?.status === 'connected',
+            autoUploadEnabled: doc?.autoUploadEnabled === true,
+            privacyStatus: doc?.privacyStatus === 'public' || doc?.privacyStatus === 'unlisted' ? doc.privacyStatus : 'private',
+            targetChannelLabel: typeof doc?.targetChannelLabel === 'string' ? doc.targetChannelLabel : '',
+            googleEmail: typeof doc?.googleEmail === 'string' ? doc.googleEmail : '',
+            connectedAt: typeof doc?.connectedAt === 'string' ? doc.connectedAt : '',
+            lastUploadAt: typeof doc?.lastUploadAt === 'string' ? doc.lastUploadAt : '',
+          };
+        })
+      );
+      res.json({ configured: true, channels });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 500)
+        .json({ error: error instanceof Error ? error.message : 'Gagal membaca status koneksi YouTube.' });
+    }
+  });
+
+  app.post('/api/youtube/oauth/start', (req, res) => {
+    try {
+      const config = getYoutubeOAuthConfig();
+      const uid = String(res.locals.firebaseUid ?? '');
+      const body = req.body as { channelId?: unknown } | undefined;
+      if (!isYoutubeChannelId(body?.channelId)) {
+        res.status(400).json({ error: 'Pilih salah satu channel YouTube yang valid.' });
+        return;
+      }
+      const state = createYoutubeOAuthState(uid, body.channelId, config.stateSecret);
+      const authorization = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+      authorization.searchParams.set('client_id', config.clientId);
+      authorization.searchParams.set('redirect_uri', config.redirectUri);
+      authorization.searchParams.set('response_type', 'code');
+      authorization.searchParams.set('scope', [
+        'https://www.googleapis.com/auth/youtube.upload',
+        'openid',
+        'email',
+        'profile',
+      ].join(' '));
+      authorization.searchParams.set('access_type', 'offline');
+      authorization.searchParams.set('prompt', 'consent');
+      authorization.searchParams.set('include_granted_scopes', 'true');
+      authorization.searchParams.set('state', state);
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ authorizationUrl: authorization.toString() });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 503)
+        .json({ error: error instanceof Error ? error.message : 'Konfigurasi OAuth YouTube belum lengkap.' });
+    }
+  });
+
+  app.post('/api/youtube/oauth/exchange', async (req, res) => {
+    try {
+      const config = getYoutubeOAuthConfig();
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const body = req.body as { code?: unknown; state?: unknown } | undefined;
+      const code = typeof body?.code === 'string' ? body.code.trim() : '';
+      const stateValue = typeof body?.state === 'string' ? body.state : '';
+      if (!code || code.length > 4096) {
+        res.status(400).json({ error: 'Kode persetujuan Google tidak valid.' });
+        return;
+      }
+      const state = verifyYoutubeOAuthState(stateValue, config.stateSecret);
+      if (state.uid !== uid) {
+        res.status(403).json({ error: 'OAuth YouTube ini dimulai dari akun Kantor AI yang berbeda.' });
+        return;
+      }
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          code,
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          redirect_uri: config.redirectUri,
+          grant_type: 'authorization_code',
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const tokenData = await tokenResponse.json() as {
+        access_token?: string; refresh_token?: string; expires_in?: number;
+        scope?: string; error_description?: string; error?: string;
+      };
+      if (!tokenResponse.ok || !tokenData.access_token) {
+        throw new Error(tokenData.error_description || tokenData.error || 'Google gagal menukar kode OAuth.');
+      }
+      const grantedScopes = String(tokenData.scope ?? '').split(' ');
+      if (!grantedScopes.includes('https://www.googleapis.com/auth/youtube.upload')) {
+        throw new Error('Izin youtube.upload belum diberikan. Hubungkan kembali dan setujui izin upload.');
+      }
+      const oldDoc = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', state.channelId, firebaseToken);
+      const refreshToken = tokenData.refresh_token ||
+        (typeof oldDoc?.encryptedRefreshToken === 'string'
+          ? decryptYoutubeRefreshToken(oldDoc.encryptedRefreshToken, config.encryptionKey)
+          : '');
+      if (!refreshToken) {
+        throw new Error('Google tidak mengirim refresh token. Ulangi koneksi dan izinkan akses offline.');
+      }
+      const profileResponse = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+        headers: { Authorization: `Bearer ${tokenData.access_token}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      const profile = profileResponse.ok
+        ? await profileResponse.json() as { email?: string; name?: string }
+        : {};
+      const now = new Date().toISOString();
+      await writeYoutubeFirestoreDocument(
+        uid, 'youtubeConnections', state.channelId,
+        {
+          ownerUid: uid,
+          channelId: state.channelId,
+          status: 'connected',
+          googleEmail: String(profile.email ?? '').slice(0, 254),
+          googleDisplayName: String(profile.name ?? '').slice(0, 120),
+          encryptedRefreshToken: encryptYoutubeRefreshToken(refreshToken, config.encryptionKey),
+          connectedAt: typeof oldDoc?.connectedAt === 'string' ? oldDoc.connectedAt : now,
+          updatedAt: now,
+          autoUploadEnabled: oldDoc?.autoUploadEnabled === true,
+          privacyStatus: oldDoc?.privacyStatus === 'public' || oldDoc?.privacyStatus === 'unlisted' ? oldDoc.privacyStatus : 'private',
+          targetChannelLabel: typeof oldDoc?.targetChannelLabel === 'string' ? oldDoc.targetChannelLabel : '',
+          grantedScopes: ['https://www.googleapis.com/auth/youtube.upload'],
+        },
+        firebaseToken
+      );
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ ok: true, channelId: state.channelId, googleEmail: profile.email ?? '', expiresIn: tokenData.expires_in ?? 3600 });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 400)
+        .json({ error: error instanceof Error ? error.message : 'Gagal menyimpan koneksi YouTube.' });
+    }
+  });
+
+  app.post('/api/youtube/connections/config', async (req, res) => {
+    try {
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const body = req.body as {
+        channelId?: unknown; autoUploadEnabled?: unknown; privacyStatus?: unknown; targetChannelLabel?: unknown;
+      } | undefined;
+      if (!isYoutubeChannelId(body?.channelId)) {
+        res.status(400).json({ error: 'Channel YouTube tidak valid.' });
+        return;
+      }
+      const oldDoc = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, firebaseToken);
+      if (oldDoc?.status !== 'connected') {
+        res.status(409).json({ error: 'Hubungkan akun YouTube terlebih dahulu.' });
+        return;
+      }
+      const next = {
+        ...oldDoc,
+        ownerUid: uid,
+        channelId: body.channelId,
+        autoUploadEnabled: typeof body.autoUploadEnabled === 'boolean' ? body.autoUploadEnabled : oldDoc.autoUploadEnabled === true,
+        privacyStatus: isYoutubePrivacyStatus(body.privacyStatus) ? body.privacyStatus : 'private',
+        targetChannelLabel: typeof body.targetChannelLabel === 'string' ? body.targetChannelLabel.trim().slice(0, 120) : String(oldDoc.targetChannelLabel ?? ''),
+        updatedAt: new Date().toISOString(),
+      };
+      await writeYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, next, firebaseToken);
+      res.json({ ok: true, channel: sanitizeYoutubeConnection(body.channelId, next) });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 500)
+        .json({ error: error instanceof Error ? error.message : 'Gagal menyimpan pengaturan YouTube.' });
+    }
+  });
+
+  app.post('/api/youtube/access-token', async (req, res) => {
+    try {
+      const config = getYoutubeOAuthConfig();
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const body = req.body as { channelId?: unknown } | undefined;
+      if (!isYoutubeChannelId(body?.channelId)) {
+        res.status(400).json({ error: 'Channel YouTube tidak valid.' });
+        return;
+      }
+      const connection = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, firebaseToken);
+      if (connection?.status !== 'connected' || typeof connection.encryptedRefreshToken !== 'string') {
+        res.status(409).json({ error: 'Akun YouTube untuk channel ini belum terhubung.' });
+        return;
+      }
+      const refreshToken = decryptYoutubeRefreshToken(connection.encryptedRefreshToken, config.encryptionKey);
+      const tokenResponse = await fetch('https://oauth2.googleapis.com/token', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          client_id: config.clientId,
+          client_secret: config.clientSecret,
+          refresh_token: refreshToken,
+          grant_type: 'refresh_token',
+        }),
+        signal: AbortSignal.timeout(15_000),
+      });
+      const tokenData = await tokenResponse.json() as { access_token?: string; expires_in?: number; error_description?: string };
+      if (!tokenResponse.ok || !tokenData.access_token) {
+        if (tokenData.error_description?.toLowerCase().includes('revoked')) {
+          res.status(401).json({ error: 'Izin YouTube telah dicabut. Hubungkan ulang akun YouTube.' });
+          return;
+        }
+        throw new Error(tokenData.error_description || 'Gagal memperbarui token YouTube.');
+      }
+      res.setHeader('Cache-Control', 'no-store');
+      res.json({ accessToken: tokenData.access_token, expiresIn: tokenData.expires_in ?? 3600 });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 500)
+        .json({ error: error instanceof Error ? error.message : 'Gagal memperoleh token upload YouTube.' });
+    }
+  });
+
+  app.post('/api/youtube/uploads/record', async (req, res) => {
+    try {
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const body = req.body as {
+        channelId?: unknown; videoId?: unknown; title?: unknown; description?: unknown;
+        privacyStatus?: unknown; status?: unknown; error?: unknown; runId?: unknown;
+      } | undefined;
+      if (!isYoutubeChannelId(body?.channelId) || typeof body?.videoId !== 'string' || !/^[\w-]{6,32}$/.test(body.videoId)) {
+        res.status(400).json({ error: 'Data riwayat upload YouTube tidak valid.' });
+        return;
+      }
+      const recordId = body.videoId;
+      const record = {
+        ownerUid: uid,
+        channelId: body.channelId,
+        videoId: recordId,
+        title: String(body.title ?? '').slice(0, 100),
+        description: String(body.description ?? '').slice(0, 5000),
+        privacyStatus: isYoutubePrivacyStatus(body.privacyStatus) ? body.privacyStatus : 'private',
+        status: String(body.status ?? 'uploaded').slice(0, 40),
+        error: String(body.error ?? '').slice(0, 1000),
+        runId: String(body.runId ?? '').slice(0, 140),
+        createdAt: new Date().toISOString(),
+        videoUrl: `https://www.youtube.com/watch?v=${recordId}`,
+      };
+      await writeYoutubeFirestoreDocument(uid, 'youtubeUploads', recordId, record, firebaseToken);
+      const connection = await readYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, firebaseToken);
+      if (connection) {
+        await writeYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, {
+          ...connection, lastUploadAt: record.createdAt, updatedAt: record.createdAt,
+        }, firebaseToken);
+      }
+      res.json({ ok: true, videoUrl: record.videoUrl });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 500)
+        .json({ error: error instanceof Error ? error.message : 'Gagal menyimpan histori upload YouTube.' });
+    }
+  });
+
+  app.post('/api/youtube/connections/disconnect', async (req, res) => {
+    try {
+      const uid = String(res.locals.firebaseUid ?? '');
+      const firebaseToken = getFirebaseBearerToken(req.header('authorization'));
+      const body = req.body as { channelId?: unknown } | undefined;
+      if (!isYoutubeChannelId(body?.channelId)) {
+        res.status(400).json({ error: 'Channel YouTube tidak valid.' });
+        return;
+      }
+      await deleteYoutubeFirestoreDocument(uid, 'youtubeConnections', body.channelId, firebaseToken);
+      res.json({ ok: true });
+    } catch (error) {
+      res.status(error instanceof Error && 'statusCode' in error ? Number((error as {statusCode:number}).statusCode) : 500)
+        .json({ error: error instanceof Error ? error.message : 'Gagal memutus koneksi YouTube.' });
+    }
   });
 
   // Master Bible is never held in serverless memory. The authenticated client reads
