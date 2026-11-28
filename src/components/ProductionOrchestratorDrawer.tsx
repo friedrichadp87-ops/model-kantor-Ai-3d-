@@ -85,6 +85,7 @@ interface ProductionOrchestratorDrawerProps {
   masterBibleVerseCount?: number;
   channelTemplates: ChannelTemplatesMap;
   providerConfig: ProviderConfig;
+  editorNarrationAudioUrl?: string | null;
   onClose: () => void;
   onOpenShortsFactory: () => void;
   onOpenProviderSettings: () => void;
@@ -140,6 +141,7 @@ export function ProductionOrchestratorDrawer({
   masterBibleVerseCount = 0,
   channelTemplates,
   providerConfig,
+  editorNarrationAudioUrl = null,
   onClose,
   onOpenShortsFactory,
   onOpenProviderSettings,
@@ -382,6 +384,8 @@ export function ProductionOrchestratorDrawer({
       stageNotes: {},
       scenes: [],
       srtText: '',
+      narrationAudioDataUrl: editorNarrationAudioUrl ?? undefined,
+      narrationAudioNote: editorNarrationAudioUrl ? 'Audio dari Video Editor siap dipasang' : undefined,
     };
 
     activeRunIdRef.current = initialRun.id;
@@ -1027,7 +1031,7 @@ export function ProductionOrchestratorDrawer({
   };
 
   // Re-assemble final video from current scenes + audio
-  const handleReassembleVideo = async () => {
+  const handleReassembleVideo = async (audioOverride?: string) => {
     if (!runState) return;
     const readyScenes = runState.scenes.filter((s) => s.videoDataUrl || s.keyframeDataUrl);
     if (readyScenes.length === 0) return;
@@ -1045,7 +1049,7 @@ export function ProductionOrchestratorDrawer({
             videoDataUrl: s.videoDataUrl,
             keyframeDataUrl: s.keyframeDataUrl,
           })),
-          audioDataUrl: runState.narrationAudioDataUrl,
+          audioDataUrl: audioOverride ?? runState.narrationAudioDataUrl ?? editorNarrationAudioUrl,
         }),
       });
       const data = (await res.json()) as AssembledVideoArtifact & { error?: string };
@@ -1682,6 +1686,16 @@ export function ProductionOrchestratorDrawer({
                       <p className={`mt-1 whitespace-pre-line ${mutedText}`}>
                         {runState.scriptArc.fullNarrationScript}
                       </p>
+                      {editorNarrationAudioUrl && (
+                        <button
+                          type="button"
+                          onClick={() => void handleReassembleVideo(editorNarrationAudioUrl)}
+                          disabled={sceneBusyKey === 'reassemble' || running || !runState.scenes.some((scene) => scene.videoDataUrl || scene.keyframeDataUrl)}
+                          className="mt-2 inline-flex items-center gap-1.5 rounded-lg border border-emerald-500/50 px-3 py-2 text-xs font-semibold text-emerald-500 disabled:opacity-50"
+                        >
+                          <Volume2 className="h-3.5 w-3.5" /> Pasang audio dari Video Editor ke proyek ini
+                        </button>
+                      )}
                       {providerConfig.voiceProvider === 'edge-tts' && (
                         <div className="mt-3 space-y-2">
                           <button
