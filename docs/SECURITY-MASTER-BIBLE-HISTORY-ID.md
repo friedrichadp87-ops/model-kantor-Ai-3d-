@@ -130,3 +130,6 @@ Buat secret secara lokal dengan password manager atau generator tepercaya. Janga
 - Upload browser memakai sesi resumable YouTube. Pengguna harus membiarkan tab aplikasi terbuka sampai transfer video selesai; ini bukan job serverless background 24/7. Penjadwalan upload tanpa browser terbuka memerlukan worker/cloud job yang tahan lama pada tahap berikutnya.
 - Setiap video memakai kuota YouTube Data API; pantau quota project dan kebijakan YouTube.
 - Uji pertama gunakan Private. Pastikan kanal Google yang terhubung benar sebelum mengaktifkan Public/Unlisted atau auto-upload.
+
+
+Catatan audit: perubahan YouTube OAuth diuji pada branch CI terpisah; gunakan Pull Request Integrasi YouTube untuk meninjau perubahan fitur.
