@@ -49,6 +49,7 @@ import {
   type SanitizedMasterBibleChunkPayload,
   type SanitizedMasterBibleMetaPayload,
   sanitizeWorkHistoryRecord,
+  selectMasterBibleChunksForUpload,
   type WorkHistoryRecord,
 } from './officeSync';
 
@@ -582,16 +583,11 @@ export async function loadMasterBibleFromFirestore(
     }
     const metaData = metaSnap.data() as Partial<SanitizedMasterBibleMetaPayload>;
     const chunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
-    const chunks: Array<Partial<SanitizedMasterBibleChunkPayload>> = [];
+    const allChunks: Array<Partial<SanitizedMasterBibleChunkPayload>> = [];
     chunksSnap.forEach((snap) => {
-      const chunk = snap.data() as Partial<SanitizedMasterBibleChunkPayload>;
-      // New uploads are versioned. Keep support for legacy unversioned chunks until
-      // a new Master Bible is saved once from the Settings screen.
-      if (metaData.uploadId ? chunk.uploadId === metaData.uploadId : !chunk.uploadId) {
-        chunks.push(chunk);
-      }
+      allChunks.push(snap.data() as Partial<SanitizedMasterBibleChunkPayload>);
     });
-
+    const chunks = selectMasterBibleChunksForUpload(metaData, allChunks);
     const database = reassembleMasterBibleFromFirestore(metaData, chunks);
     return {
       ok: true,
