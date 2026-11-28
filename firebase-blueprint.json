@@ -23,7 +23,12 @@
           "format": "date-time"
         }
       },
-      "required": ["email", "displayName", "createdAt", "updatedAt"]
+      "required": [
+        "email",
+        "displayName",
+        "createdAt",
+        "updatedAt"
+      ]
     },
     "WorkspaceSettings": {
       "title": "WorkspaceSettings",
@@ -46,7 +51,12 @@
           "maxLength": 64
         }
       },
-      "required": ["ownerUid", "channelTemplates", "providerConfig", "updatedAt"]
+      "required": [
+        "ownerUid",
+        "channelTemplates",
+        "providerConfig",
+        "updatedAt"
+      ]
     },
     "ShortsQueueItem": {
       "title": "ShortsQueueItem",
@@ -80,7 +90,11 @@
         },
         "durationSeconds": {
           "type": "number",
-          "enum": [30, 45, 60]
+          "enum": [
+            30,
+            45,
+            60
+          ]
         },
         "notes": {
           "type": "string",
@@ -97,7 +111,12 @@
         },
         "guardianStatus": {
           "type": "string",
-          "enum": ["LULUS", "PERLU REVISI", "DITOLAK", "BELUM DICEK"]
+          "enum": [
+            "LULUS",
+            "PERLU REVISI",
+            "DITOLAK",
+            "BELUM DICEK"
+          ]
         },
         "updatedAt": {
           "type": "string",
@@ -163,7 +182,11 @@
         },
         "status": {
           "type": "string",
-          "enum": ["running", "completed", "error"]
+          "enum": [
+            "running",
+            "completed",
+            "error"
+          ]
         },
         "createdAt": {
           "type": "string",
@@ -283,32 +306,203 @@
         "verses",
         "updatedAt"
       ]
+    },
+    "WorkHistoryRecord": {
+      "title": "WorkHistoryRecord",
+      "description": "Append-only audit event for every AI activity across each Kantor AI 3D floor, including project/run, agent, stage, input, result, provider, Master Bible source and errors.",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "maxLength": 140
+        },
+        "ownerUid": {
+          "type": "string",
+          "maxLength": 128
+        },
+        "floorId": {
+          "type": "number",
+          "enum": [
+            1,
+            2,
+            3
+          ]
+        },
+        "floorName": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "channelId": {
+          "type": "string",
+          "enum": [
+            "daily-faith-inspiration",
+            "bible-stories-3d",
+            "bible-facts-mysteries"
+          ]
+        },
+        "channelName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "projectId": {
+          "type": "string",
+          "maxLength": 140
+        },
+        "runId": {
+          "type": "string",
+          "maxLength": 140
+        },
+        "taskId": {
+          "type": "string",
+          "maxLength": 140
+        },
+        "agentId": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "agentName": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "stageId": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "stageTitle": {
+          "type": "string",
+          "maxLength": 180
+        },
+        "eventType": {
+          "type": "string",
+          "maxLength": 100
+        },
+        "phase": {
+          "type": "string",
+          "enum": [
+            "start",
+            "completed",
+            "error",
+            "warning"
+          ]
+        },
+        "title": {
+          "type": "string",
+          "maxLength": 240
+        },
+        "input": {
+          "type": "string",
+          "maxLength": 10000
+        },
+        "output": {
+          "type": "string",
+          "maxLength": 18000
+        },
+        "error": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "detail": {
+          "type": "string",
+          "maxLength": 4000
+        },
+        "provider": {
+          "type": "string",
+          "maxLength": 80
+        },
+        "model": {
+          "type": "string",
+          "maxLength": 120
+        },
+        "masterBibleActive": {
+          "type": "boolean"
+        },
+        "masterBibleSourceName": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        },
+        "completedAt": {
+          "type": "string",
+          "format": "date-time",
+          "maxLength": 64
+        }
+      },
+      "required": [
+        "id",
+        "ownerUid",
+        "floorId",
+        "floorName",
+        "channelId",
+        "channelName",
+        "projectId",
+        "runId",
+        "taskId",
+        "agentId",
+        "agentName",
+        "stageId",
+        "stageTitle",
+        "eventType",
+        "phase",
+        "title",
+        "input",
+        "output",
+        "error",
+        "detail",
+        "provider",
+        "model",
+        "masterBibleActive",
+        "masterBibleSourceName",
+        "createdAt",
+        "completedAt"
+      ]
     }
   },
   "firestore": {
     "/users/{userId}": {
-      "schema": { "$ref": "#/entities/UserProfile" },
+      "schema": {
+        "$ref": "#/entities/UserProfile"
+      },
       "description": "Dokumen profil pengguna terautentikasi (selaras 100% dengan validProfile proyek kantor-ai-agent-creator)"
     },
     "/users/{userId}/workspace/settings": {
-      "schema": { "$ref": "#/entities/WorkspaceSettings" },
+      "schema": {
+        "$ref": "#/entities/WorkspaceSettings"
+      },
       "description": "Template 3 channel YouTube Shorts dan konfigurasi routing provider non-rahasia Kantor AI 3D"
     },
     "/users/{userId}/shortsQueue/{itemId}": {
-      "schema": { "$ref": "#/entities/ShortsQueueItem" },
+      "schema": {
+        "$ref": "#/entities/ShortsQueueItem"
+      },
       "description": "Antrean produksi konten Shorts 3 channel milik pengguna di Kantor AI 3D"
     },
     "/users/{userId}/agentTasks/{taskId}": {
-      "schema": { "$ref": "#/entities/AgentTaskRecord" },
+      "schema": {
+        "$ref": "#/entities/AgentTaskRecord"
+      },
       "description": "Riwayat tugas dan keluaran dari 13 agen AI milik pengguna di Kantor AI 3D"
     },
     "/users/{userId}/masterBible/meta": {
-      "schema": { "$ref": "#/entities/MasterBibleMeta" },
+      "schema": {
+        "$ref": "#/entities/MasterBibleMeta"
+      },
       "description": "Metadata Master Alkitab Terjemahan Baru (TB) milik pemilik studio untuk L1, L2 & L3"
     },
     "/users/{userId}/masterBibleChunks/{chunkId}": {
-      "schema": { "$ref": "#/entities/MasterBibleChunk" },
+      "schema": {
+        "$ref": "#/entities/MasterBibleChunk"
+      },
       "description": "Potongan ayat Alkitab Terjemahan Baru yang terpecah aman di bawah batas 1 MB per dokumen Firestore"
+    },
+    "/users/{userId}/workHistory/{eventId}": {
+      "schema": {
+        "$ref": "#/entities/WorkHistoryRecord"
+      },
+      "description": "Append-only audit history of AI work and errors for the user's three floors, ordered by createdAt descending."
     }
   }
 }
