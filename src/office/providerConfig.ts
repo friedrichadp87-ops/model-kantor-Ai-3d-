@@ -47,7 +47,7 @@ export function normalizeEdgeTtsWorkerUrl(raw: string): { ok: true; url: string 
 
   return {
     ok: true,
-    url: `${parsed.protocol}//${parsed.host}${parsed.pathname}`.replace(/\\/+$/, ''),
+    url: `${parsed.protocol}//${parsed.host}${parsed.pathname}`.replace(/\/+$/, ''),
   };
 }
 
@@ -65,14 +65,14 @@ export function validateEdgeTtsSettings(input: {
     : null;
   if (!voice) return { ok: false, error: 'Pilih salah satu preset suara Edge-TTS yang tersedia.' };
 
-  const rate = typeof input.rate === 'string' && /^[+-]?(?:0|[1-2]?\\d|30)%$/.test(input.rate)
+  const rate = typeof input.rate === 'string' && /^[+-]?(?:0|[1-2]?\d|30)%$/.test(input.rate)
     ? input.rate
     : null;
   if (!rate || Number(rate.replace('%', '')) < -30 || Number(rate.replace('%', '')) > 30) {
     return { ok: false, error: 'Rate harus berada pada rentang -30% sampai +30%.' };
   }
 
-  const pitch = typeof input.pitch === 'string' && /^[+-]?(?:0|[1-2]?\\d|20)Hz$/.test(input.pitch)
+  const pitch = typeof input.pitch === 'string' && /^[+-]?(?:0|[1-2]?\d|20)Hz$/.test(input.pitch)
     ? input.pitch
     : null;
   if (!pitch || Number(pitch.replace('Hz', '')) < -20 || Number(pitch.replace('Hz', '')) > 20) {
