@@ -506,29 +506,42 @@ export async function syncMasterBibleToFirestore(
   const metaPath = FIRESTORE_PATHS.masterBibleMetaDoc(uid);
   const chunksColPath = FIRESTORE_PATHS.masterBibleChunksCollection(uid);
   const chunked = chunkMasterBibleForFirestore(uid, database);
+  const uploadId = `bible_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 10)}`;
+  const versionedChunks = chunked.chunks.map(({ chunkId, payload }) => ({
+    documentId: `${uploadId}_${chunkId}`,
+    payload: { ...payload, uploadId },
+  }));
 
   try {
-    // Write chunks in controlled parallel groups of 4 so large 66-book uploads stay fast & reliable
+    // Write versioned chunks first. The currently published metadata still points
+    // to the previous complete upload while a replacement is being prepared.
     const batchConcurrency = 4;
-    for (let i = 0; i < chunked.chunks.length; i += batchConcurrency) {
-      const slice = chunked.chunks.slice(i, i + batchConcurrency);
+    for (let i = 0; i < versionedChunks.length; i += batchConcurrency) {
+      const slice = versionedChunks.slice(i, i + batchConcurrency);
       await Promise.all(
-        slice.map(({ chunkId, payload }) =>
-          setDoc(doc(db, 'users', uid, 'masterBibleChunks', chunkId), payload)
+        slice.map(({ documentId, payload }) =>
+          setDoc(doc(db, 'users', uid, 'masterBibleChunks', documentId), payload)
         )
       );
     }
 
-    // Remove any stale leftover chunk docs if replacing a larger Bible with a smaller one
-    const existingChunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
-    const validChunkIds = new Set(chunked.chunks.map((c) => c.chunkId));
-    const staleDocs = existingChunksSnap.docs.filter((d) => !validChunkIds.has(d.id));
-    if (staleDocs.length > 0) {
-      await Promise.all(staleDocs.map((d) => deleteDoc(d.ref)));
-    }
+    // Atomically publish the new version only after every chunk has been written.
+    await setDoc(doc(db, 'users', uid, 'masterBible', 'meta'), {
+      ...chunked.meta,
+      uploadId,
+    });
 
-    // Write metadata document last so readers always observe a complete chunk set
-    await setDoc(doc(db, 'users', uid, 'masterBible', 'meta'), chunked.meta);
+    // Old versions are no longer referenced. Clean them up after publication;
+    // cleanup failure is harmless because readers filter by the active uploadId.
+    try {
+      const existingChunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
+      const staleDocs = existingChunksSnap.docs.filter((item) => item.data().uploadId !== uploadId);
+      if (staleDocs.length > 0) {
+        await Promise.all(staleDocs.map((item) => deleteDoc(item.ref)));
+      }
+    } catch (cleanupError) {
+      console.warn('Firestore Master Bible old-version cleanup deferred:', cleanupError);
+    }
 
     return {
       ok: true,
@@ -564,7 +577,12 @@ export async function loadMasterBibleFromFirestore(
     const chunksSnap = await getDocs(collection(db, 'users', uid, 'masterBibleChunks'));
     const chunks: Array<Partial<SanitizedMasterBibleChunkPayload>> = [];
     chunksSnap.forEach((snap) => {
-      chunks.push(snap.data() as Partial<SanitizedMasterBibleChunkPayload>);
+      const chunk = snap.data() as Partial<SanitizedMasterBibleChunkPayload>;
+      // New uploads are versioned. Keep support for legacy unversioned chunks until
+      // a new Master Bible is saved once from the Settings screen.
+      if (metaData.uploadId ? chunk.uploadId === metaData.uploadId : !chunk.uploadId) {
+        chunks.push(chunk);
+      }
     });
 
     const database = reassembleMasterBibleFromFirestore(metaData, chunks);
