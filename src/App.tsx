@@ -1018,13 +1018,16 @@ export default function App() {
     setMasterBibleError(null);
     setMasterBibleSyncNotice(null);
     try {
-      await clearMasterBibleFromIndexedDb();
       if (firebaseUser) {
-        await deleteMasterBibleFromFirestore(firebaseUser.uid).catch(() => undefined);
+        const cloudDelete = await deleteMasterBibleFromFirestore(firebaseUser.uid);
+        if (!cloudDelete.ok) {
+          throw new Error(cloudDelete.errorMessage || 'Master Alkitab gagal dihapus dari Firestore.');
+        }
       }
+      await clearMasterBibleFromIndexedDb();
       clearApiMasterBibleCache();
       setMasterBible(null);
-      setMasterBibleSyncMode('server-synced');
+      setMasterBibleSyncMode('local-only');
       setActivityLog((prev) =>
         appendActivityLog(prev, [
           createStudioActivityEntry(
