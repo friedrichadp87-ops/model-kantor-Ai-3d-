@@ -21,6 +21,9 @@ import {
   getDocs,
   getFirestore,
   onSnapshot,
+  orderBy,
+  query,
+  limit,
   serverTimestamp,
   setDoc,
   updateDoc,
@@ -45,6 +48,8 @@ import {
   type FirebaseAuthUserSummary,
   type SanitizedMasterBibleChunkPayload,
   type SanitizedMasterBibleMetaPayload,
+  sanitizeWorkHistoryRecord,
+  type WorkHistoryRecord,
 } from './officeSync';
 
 export const firebaseConfig = {
@@ -419,6 +424,63 @@ export function subscribeShortsQueue(
         permissionDenied: isPermissionDeniedError(error),
         path,
         message: errInfo.error,
+      });
+    }
+  );
+}
+
+
+export interface WorkHistoryWriteResult extends SyncWriteResult {}
+
+export async function appendWorkHistoryToFirestore(
+  uid: string,
+  record: Omit<WorkHistoryRecord, 'ownerUid'>
+): Promise<WorkHistoryWriteResult> {
+  const payload = sanitizeWorkHistoryRecord(uid, record);
+  const path = `users/${uid}/workHistory/${payload.id}`;
+  try {
+    // Immutable event document: each start/completion/error is a separate append-only record.
+    await setDoc(doc(db, 'users', uid, 'workHistory', payload.id), payload);
+    return { ok: true, path };
+  } catch (error) {
+    const info = buildFirestoreErrorInfo(error, OperationType.WRITE, path);
+    console.warn('Firestore Work History Write Notice:', JSON.stringify(info));
+    return {
+      ok: false,
+      permissionDenied: isPermissionDeniedError(error),
+      path,
+      errorMessage: info.error,
+    };
+  }
+}
+
+export function subscribeWorkHistory(
+  uid: string,
+  onRecords: (records: WorkHistoryRecord[]) => void,
+  onError: (info: { permissionDenied: boolean; path: string; message: string }) => void
+): Unsubscribe {
+  const path = `users/${uid}/workHistory`;
+  const historyQuery = query(
+    collection(db, 'users', uid, 'workHistory'),
+    orderBy('createdAt', 'desc'),
+    limit(200)
+  );
+  return onSnapshot(
+    historyQuery,
+    (snapshot) => {
+      const records = snapshot.docs.map((item) => ({
+        ...(item.data() as WorkHistoryRecord),
+        id: item.id,
+      }));
+      onRecords(records);
+    },
+    (error) => {
+      const info = buildFirestoreErrorInfo(error, OperationType.LIST, path);
+      console.warn('Firestore Work History Subscription Notice:', JSON.stringify(info));
+      onError({
+        permissionDenied: isPermissionDeniedError(error),
+        path,
+        message: info.error,
       });
     }
   );
