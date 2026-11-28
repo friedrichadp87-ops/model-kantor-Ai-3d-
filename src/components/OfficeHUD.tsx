@@ -98,6 +98,7 @@ interface OfficeHUDProps {
   floorWorkflowFloorId: FloorId | null;
   controlsOpen: boolean;
   providerConfig: ProviderConfig;
+  editorNarrationAudioUrl: string | null;
   onNarrationAudioCreated: (dataUrl: string) => void;
   selectedSpecialistId: SpecialistAgentId | null;
   masterBible: LocalBibleDatabase | null;
@@ -228,6 +229,7 @@ export function OfficeHUD({
   floorWorkflowFloorId,
   controlsOpen,
   providerConfig,
+  editorNarrationAudioUrl,
   selectedSpecialistId,
   masterBible,
   masterBibleBusy,
@@ -585,6 +587,7 @@ export function OfficeHUD({
                 onProjectVideo={onProjectVideo}
                 onMountGalleryImage={onMountGalleryImage}
                 providerConfig={providerConfig}
+                editorNarrationAudioUrl={editorNarrationAudioUrl}
                 onVoiceSynthesisEvent={onVoiceSynthesisEvent}
                 onNarrationAudioCreated={onNarrationAudioCreated}
               />
