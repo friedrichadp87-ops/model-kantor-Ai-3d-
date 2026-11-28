@@ -589,7 +589,7 @@ export function MediaStudioDrawer({
               {(narrationAudioUrl || editorNarrationAudioUrl) && (
                 <div className="flex flex-wrap items-center gap-2">
                   <audio controls src={narrationAudioUrl ?? editorNarrationAudioUrl ?? undefined} className="h-8 min-w-0 flex-1" />
-                  <a href={narrationAudioUrl} download="kantor-ai-narasi-edge-tts.mp3" className={`rounded-md border px-2 py-1 text-[11px] ${subtleBorder}`}>
+                  <a href={narrationAudioUrl ?? editorNarrationAudioUrl ?? undefined} download="kantor-ai-narasi-edge-tts.mp3" className={`rounded-md border px-2 py-1 text-[11px] ${subtleBorder}`}>
                     <Download className="mr-1 inline h-3 w-3" /> Unduh MP3
                   </a>
                   <button type="button" onClick={() => onNarrationAudioCreated(narrationAudioUrl ?? editorNarrationAudioUrl!)} className="rounded-md bg-emerald-600 px-2 py-1 text-[11px] font-semibold text-white">Pasang ke proyek video</button>
