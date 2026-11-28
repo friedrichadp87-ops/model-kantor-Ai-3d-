@@ -459,6 +459,129 @@
         "createdAt",
         "completedAt"
       ]
+    },
+    "YoutubeConnection": {
+      "title": "YoutubeConnection",
+      "description": "Server-encrypted YouTube OAuth refresh-token record; browser UI receives sanitized status only.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string"
+        },
+        "channelId": {
+          "type": "string",
+          "enum": [
+            "daily-faith-inspiration",
+            "bible-stories-3d",
+            "bible-facts-mysteries"
+          ]
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "connected"
+          ]
+        },
+        "googleEmail": {
+          "type": "string"
+        },
+        "googleDisplayName": {
+          "type": "string"
+        },
+        "encryptedRefreshToken": {
+          "type": "string",
+          "description": "AES-256-GCM ciphertext only."
+        },
+        "autoUploadEnabled": {
+          "type": "boolean"
+        },
+        "privacyStatus": {
+          "type": "string",
+          "enum": [
+            "private",
+            "unlisted",
+            "public"
+          ]
+        },
+        "targetChannelLabel": {
+          "type": "string"
+        },
+        "connectedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "lastUploadAt": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "channelId",
+        "status",
+        "encryptedRefreshToken",
+        "autoUploadEnabled",
+        "privacyStatus",
+        "connectedAt",
+        "updatedAt"
+      ]
+    },
+    "YoutubeUpload": {
+      "title": "YoutubeUpload",
+      "description": "Audit record for published videos and SEO metadata.",
+      "type": "object",
+      "properties": {
+        "ownerUid": {
+          "type": "string"
+        },
+        "channelId": {
+          "type": "string"
+        },
+        "videoId": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "privacyStatus": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string"
+        },
+        "error": {
+          "type": "string"
+        },
+        "runId": {
+          "type": "string"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "videoUrl": {
+          "type": "string",
+          "format": "uri"
+        }
+      },
+      "required": [
+        "ownerUid",
+        "channelId",
+        "videoId",
+        "title",
+        "description",
+        "privacyStatus",
+        "status",
+        "createdAt",
+        "videoUrl"
+      ]
     }
   },
   "firestore": {
@@ -503,6 +626,18 @@
         "$ref": "#/entities/WorkHistoryRecord"
       },
       "description": "Append-only audit history of AI work and errors for the user's three floors, ordered by createdAt descending."
+    },
+    "/users/{userId}/youtubeConnections/{channelId}": {
+      "schema": {
+        "$ref": "#/entities/YoutubeConnection"
+      },
+      "description": "Encrypted YouTube OAuth connection per owner and channel."
+    },
+    "/users/{userId}/youtubeUploads/{videoId}": {
+      "schema": {
+        "$ref": "#/entities/YoutubeUpload"
+      },
+      "description": "History of YouTube uploads made by the SEO Publisher agent."
     }
   }
 }
