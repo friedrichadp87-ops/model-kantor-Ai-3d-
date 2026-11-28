@@ -1803,7 +1803,7 @@ export function ProductionOrchestratorDrawer({
                           Putar di Layar 3D
                         </button>
                         {runState.finalQc?.readyForYoutubeUpload && runState.youtubeMetadata && (
-                          <button type="button" disabled={youtubeUploadBusy} onClick={() => void publishYoutubeVideo(runState, false)}
+                          <button type="button" disabled={youtubeUploadBusy} onClick={() => void publishYoutubeVideo({ ...runState, channelId: runState.input.channelId }, false)}
                             className={'inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-semibold text-white disabled:opacity-50 ' + (isDark ? 'bg-red-600 hover:bg-red-500' : 'bg-red-700 hover:bg-red-600')}>
                             {youtubeUploadBusy ? <Loader2 className="h-3.5 w-3.5 animate-spin" aria-hidden="true" /> : <Play className="h-3.5 w-3.5" aria-hidden="true" />}
                             Upload ke YouTube
