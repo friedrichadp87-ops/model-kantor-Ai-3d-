@@ -1978,6 +1978,7 @@ export default function App() {
         floorWorkflowFloorId={floorWorkflowFloorId}
         controlsOpen={controlsOpen}
         providerConfig={providerConfig}
+        editorNarrationAudioUrl={editorNarrationAudioUrl}
         onNarrationAudioCreated={handleEditorNarrationAudioCreated}
         selectedSpecialistId={selectedSpecialistId}
         masterBible={masterBible}
