@@ -464,7 +464,7 @@ export function subscribeWorkHistory(
   const historyQuery = query(
     collection(db, 'users', uid, 'workHistory'),
     orderBy('createdAt', 'desc'),
-    limit(200)
+    limit(500)
   );
   return onSnapshot(
     historyQuery,
