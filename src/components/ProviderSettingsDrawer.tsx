@@ -17,6 +17,7 @@ import {
   SlidersHorizontal,
   Sparkles,
   Volume2,
+  Youtube,
   X,
 } from 'lucide-react';
 import { firebaseConfig, type FirestoreSyncStatus } from '../firebase/client';
@@ -37,8 +38,9 @@ import {
   type ServerProviderStatus,
 } from '../office/providerConfig';
 import type { LightingPreset } from '../office/types';
+import { YoutubeSettingsPanel } from './YoutubeSettingsPanel';
 
-export type ProviderTab = 'ollama' | 'gemini' | 'elevenlabs' | 'firebase';
+export type ProviderTab = 'ollama' | 'gemini' | 'elevenlabs' | 'firebase' | 'youtube';
 
 interface ProviderSettingsDrawerProps {
   lighting: LightingPreset;
@@ -460,6 +462,7 @@ export function ProviderSettingsDrawer({
               { id: 'gemini', label: 'Gemini API', Icon: Sparkles },
               { id: 'elevenlabs', label: 'ElevenLabs (Suara)', Icon: Volume2 },
               { id: 'firebase', label: 'Firebase Console', Icon: Cloud },
+              { id: 'youtube', label: 'YouTube OAuth', Icon: Youtube },
             ] as const
           ).map(({ id, label, Icon }) => {
             const active = activeTab === id;
@@ -1372,6 +1375,11 @@ export function ProviderSettingsDrawer({
               </div>
             </div>
           </div>
+        )}
+      </div>
+
+        {activeTab === 'youtube' && (
+          <YoutubeSettingsPanel lighting={lighting} signedIn={Boolean(firebaseUser)} />
         )}
       </div>
 
