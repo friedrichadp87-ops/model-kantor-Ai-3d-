@@ -76,13 +76,17 @@ export async function uploadVideoToYoutube(options: YoutubeUploadOptions): Promi
     throw new Error(result.error?.message || `Upload video YouTube gagal (HTTP ${uploadResponse.status}).`);
   }
   const videoUrl = `https://www.youtube.com/watch?v=${result.id}`;
-  await fetch('/api/youtube/uploads/record', {
+  const historyResponse = await fetch('/api/youtube/uploads/record', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
       channelId: options.channelId, videoId: result.id, title,
       description, privacyStatus: options.privacyStatus, status: 'uploaded', runId: options.runId,
     }),
   });
+  if (!historyResponse.ok) {
+    const historyError = await historyResponse.json().catch(() => ({})) as { error?: string };
+    throw new Error('Video sudah diunggah, tetapi riwayat Firestore gagal disimpan: ' + (historyError.error || historyResponse.statusText));
+  }
   options.onProgress?.(100);
   return { videoId: result.id, videoUrl, title };
 }
