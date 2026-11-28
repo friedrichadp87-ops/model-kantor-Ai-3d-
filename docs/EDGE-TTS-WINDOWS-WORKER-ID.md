@@ -93,3 +93,8 @@ Contoh:
 Jika naskah hanya berupa teks biasa, kirim satu segmen `narator`. Jeda setelah tiap segmen (kecuali segmen terakhir) dibuat dengan FFmpeg. Respons sukses berisi `audioBase64`, `mimeType`, `fileName`, dan jumlah segmen. Browser mengubah respons menjadi MP3 untuk pratinjau/unduh.
 
 GET `/health` mengembalikan status proses Worker tanpa menampilkan kredensial.
+
+
+## Catatan pemeriksaan source
+
+File UI TypeScript dan Worker Python berada pada branch fitur terpisah. Sebelum penggunaan produksi, jalankan pemeriksaan TypeScript, unit test, dan build dari repo; lalu lakukan tes langsung pada Windows Worker dengan token Firebase pemilik. Hasil CI source tidak menggantikan uji suara nyata.
