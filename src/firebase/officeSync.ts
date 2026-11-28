@@ -2,6 +2,7 @@ import type { ProviderConfig } from '../office/providerConfig';
 import type {
   ChannelTemplatesMap,
   LocalBibleDatabase,
+  ShortsChannelId,
   ShortsQueueItem,
 } from '../office/shortsFactory';
 import type { AgentId, TaskEntry } from '../office/types';
@@ -21,6 +22,7 @@ export const FIRESTORE_PATHS = {
   shortsQueueCollection: (uid: string) => `users/${uid}/shortsQueue`,
   shortsQueueDoc: (uid: string, itemId: string) => `users/${uid}/shortsQueue/${itemId}`,
   agentTasksCollection: (uid: string) => `users/${uid}/agentTasks`,
+  workHistoryCollection: (uid: string) => `users/${uid}/workHistory`,
   agentTaskDoc: (uid: string, taskId: string) => `users/${uid}/agentTasks/${taskId}`,
   masterBibleMetaDoc: (uid: string) => `users/${uid}/masterBible/meta`,
   masterBibleChunksCollection: (uid: string) => `users/${uid}/masterBibleChunks`,
