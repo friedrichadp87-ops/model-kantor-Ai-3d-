@@ -528,6 +528,7 @@ export function OfficeHUD({
                 masterBibleVerseCount={masterBible?.report.indexedVerseCount ?? 0}
                 channelTemplates={channelTemplates}
                 providerConfig={providerConfig}
+                editorNarrationAudioUrl={editorNarrationAudioUrl}
                 onClose={onToggleOrchestrator}
                 onOpenShortsFactory={onToggleShortsFactory}
                 onOpenProviderSettings={onOpenProviderSettingsFromOrchestrator}
