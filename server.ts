@@ -354,7 +354,7 @@ export function createApiApp(securityOverrides: ApiAppSecurityOverrides = {}): e
       return;
     }
 
-    const match = /^Bearer\\s+(.+)$/i.exec(req.header('authorization') ?? '');
+    const match = /^Bearer\s+(.+)$/i.exec(req.header('authorization') ?? '');
     if (!match) {
       res.status(401).json({ error: 'Autentikasi Firebase diperlukan untuk menggunakan API ini.' });
       return;
